@@ -242,6 +242,10 @@ void earAnalyze(Senses& in, float dt, const float* ownPartials, int nPartials, f
   float loud = (db - loudFloorDb - 5.0f) / 38.0f;
   loud = loud < 0 ? 0 : (loud > 1 ? 1 : loud);
   in.loud += (loud - in.loud) * (loud > in.loud ? 0.5f : 0.15f);
+  // the same, as a meter reads it: dB below full scale (a full-scale square wave reads 90.3 dB here)
+  float dbfs = db - 90.31f;
+  in.levelDb += (dbfs - in.levelDb) * (dbfs > in.levelDb ? 0.5f : 0.15f);
+  in.floorDb = loudFloorDb - 90.31f;
 
   // ---- a knock
   in.onset = onsetFlag; onsetFlag = false;

@@ -18,6 +18,8 @@ struct Senses {
   float bands[8] = {0};         // 0..1, low -> high
   float pitchHz = 0;            // a held outside tone right now, else 0
   bool  onset = false;          // a knock, a clap, a door
+  float levelDb = -120;         // the room's sound, dB below the microphone's full scale (its own voice removed)
+  float floorDb = -120;         // the quiet it has learned for this room, same scale
 
   // the body in space
   float tilt = 0;               // left/right lean, degrees
@@ -27,6 +29,8 @@ struct Senses {
   bool  faceDown = false;
   bool  freefall = false;
   uint32_t steps = 0;           // lifetime-of-boot step count
+  float grav[3] = {0, 0, 1};    // where down is, in g (smoothed): x lean, y through the screen, z along the body
+  float accG = 1;               // the whole acceleration right now, in g
 
   // time and place
   bool   haveTime = false;
@@ -56,6 +60,16 @@ struct Senses {
   // kin (other missingno within earshot of the link)
   int   peers = 0;
   float peerRootHz = 0;
+
+  // its own link and works
+  bool  online = false;         // joined to a network
+  uint8_t ip[4] = {0, 0, 0, 0};
+  int   wifiRssi = 0;           // dBm of the network it joined
+  bool  ota = false;            // listening for new firmware
+  uint32_t heapFree = 0;        // bytes
+  uint8_t store = 0;            // where it keeps its memory: 0 nowhere, 1 the card, 2 its own flash
+  bool  haveTz = false;         // the local clock offset is known (from the weather service)
+  int32_t utcOffset = 0;        // seconds
 
   // power
   float battV = 0;              // 0 = unknown
@@ -177,6 +191,13 @@ struct State {
   Sounding sounding;
 
   View view = V_SHORE;
+
+  // "pro": the instruments, set out by how far each one reaches
+  bool  pro = false;
+  uint8_t proBand = 0, proTool = 0;
+  bool  proOpen = false;
+  float proAge = 0;             // seconds since the dashboard appeared
+  float solarHour = 0;          // local apparent solar time, when the sky is known
 
   // the one line of text it may speak, and the line being typed to it
   char  say[84] = {0};

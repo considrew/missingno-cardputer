@@ -11,6 +11,7 @@
 #include "../missingno/src/core/mn_ear.h"
 #include "../missingno/src/core/mn_lexicon.h"
 #include "../missingno/src/core/mn_horizon.h"
+#include "../missingno/src/core/mn_pro.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -134,8 +135,8 @@ static void testNmea() {
   const char* bad = "$GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,*48\r\n";
   uint32_t g0 = n.g.good; for (const char* p = bad; *p; p++) n.feed(*p);
   CHECK(n.g.good == g0 && n.g.bad == 1, "bad checksum rejected");
-  const char* garbage = "\xff\x00$$GP,,,,*\r\n$\r\n,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,\r\n";
-  for (int i = 0; i < 160; i++) n.feed(garbage[i % 150]);
+  const char garbage[] = "\xff\x00$$GP,,,,*\r\n$\r\n,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,\r\n";
+  for (int i = 0; i < 160; i++) n.feed(garbage[i % (sizeof(garbage) - 1)]);
   printf("  good %u bad %u\n", n.g.good, n.g.bad);
 }
 
@@ -363,6 +364,70 @@ static void testHorizon() {
   horizonClose();
 }
 
+// "pro": the word opens and closes it, the arrows walk the reaches and the tools,
+// enter opens and uses, typing still reaches the mind, and every tool draws.
+static void testPro() {
+  printf("pro:\n");
+  mindInit(21); fb = buf;
+  S.in = Senses();
+  typeLine("pro");
+  CHECK(S.pro && !S.proOpen && S.proBand == 0, "pro opens the dashboard");
+  CHECK(strstr(S.say, "instruments") != nullptr, "and says how many: %s", S.say);
+  mindKey('/'); mindKey(K_VIEW_NEXT);
+  CHECK(S.proBand == 2, "right walks outward (band %d)", S.proBand);
+  mindKey(','); CHECK(S.proBand == 1, "left walks back");
+  mindKey(K_VIEW_PREV); mindKey(K_VIEW_PREV); CHECK(S.proBand == 7, "and wraps to the sky");
+  mindKey('.'); mindKey(K_VOL_DOWN); CHECK(S.proTool == 2, "down picks the next tool (%d)", S.proTool);
+  mindKey(';'); CHECK(S.proTool == 1, "up the one before");
+  float vol = S.sound.master; mindKey(K_VOL_UP);
+  CHECK(S.sound.master == vol, "volume keys are arrows here");
+  typeLine("pro echo");
+  CHECK(S.pro && S.proOpen && S.proBand == 2 && S.proTool == 2, "pro echo goes straight to the echo");
+  S.wantSounding = false; mindKey(K_ENTER);
+  CHECK(S.wantSounding, "enter on the echo strikes the room");
+  mindKey('/'); CHECK(S.proOpen && S.proBand == 2 && S.proTool == 3, "opened, right goes to the next tool");
+  mindKey('/'); CHECK(S.proBand == 3 && S.proTool == 0, "and on across the reaches");
+  mindKey(K_BACK); CHECK(!S.proOpen && S.pro, "backspace closes the tool");
+  mindKey('h'); mindKey('i'); mindKey(',');
+  CHECK(!strcmp(S.typed, "hi,"), "once typing has begun, , and / are letters (%s)", S.typed);
+  mindKey(K_ESC); CHECK(!S.typed[0] && S.pro, "escape clears the line first");
+  typeLine("pro nothing");
+  CHECK(strstr(S.say, "no nothing") != nullptr, "an unknown tool is named back");
+  S.wantPortal = false; typeLine("pro link"); mindKey(K_ENTER);
+  CHECK(S.wantPortal, "enter on link opens the wifi door");
+  mindKey(K_ESC); mindKey(K_ESC);
+  CHECK(!S.pro, "escape twice: back to the shore");
+  typeLine("pro"); typeLine("pro");
+  CHECK(!S.pro, "pro again closes it");
+
+  // every tool draws, with nothing known and with everything known
+  makeHorizon(3, 3); horizonOpen(hzRead, (uint32_t)hzBytes.size());
+  for (int pass = 0; pass < 2; pass++) {
+    S.in = Senses();
+    if (pass) {
+      S.in.haveTime = true; S.in.utc = utcOf(2026, 11, 24, 21, 30); S.in.haveFix = true; S.in.gpsFix = true;
+      S.in.lat = 47.009; S.in.lon = -121.987; S.in.sats = 8; S.in.altM = 410; S.in.speedKmh = 4;
+      S.in.haveWx = true; S.in.wmo = 63; S.in.tempC = 6.5f; S.in.humid = 88; S.in.windKmh = 31; S.in.windDir = 240; S.in.visKm = 9;
+      S.in.apCount = 14; S.in.apRssi = -48; S.in.etherFresh = true; S.in.peers = 1; S.in.peerRootHz = 98;
+      S.in.battV = 3.86f; S.in.online = true; S.in.ip[0] = 10; S.in.wifiRssi = -61; S.in.ota = true; S.in.heapFree = 140000;
+      S.in.store = 1; S.in.card = 1; S.in.cardGB = 62.2f; S.in.haveTz = true; S.in.utcOffset = -8 * 3600;
+      S.in.pitchHz = 221.0f; S.in.levelDb = -38; S.in.floorDb = -61; S.in.antenna = 0.4f; S.in.accG = 1.04f; S.in.grav[1] = 0.99f;
+      S.sounding.valid = true; S.sounding.tailMs = 333; S.sounding.verdict = 2;
+    }
+    S.pro = true; S.proOpen = false; S.proBand = 0; S.proTool = 0;
+    for (int i = 0; i < 60; i++) { S.in.dt = 1 / 30.0f; S.in.onset = (i % 15) == 0; mindTick(); }
+    int tools = proToolCount();
+    for (int i = 0; i < tools; i++) {
+      S.proOpen = false; drawFrame();
+      S.proOpen = true; drawFrame();
+      mindKey('/');
+    }
+    CHECK(S.proBand == 0 && S.proTool == 0, "%d tools walked round to the start", tools);
+  }
+  CHECK(proToolCount() >= 24, "there are %d tools", proToolCount());
+  S.pro = false; S.proOpen = false; horizonClose();
+}
+
 static void longRun() {
   printf("life:\n");
   S = State(); lifeReset(); fb = buf;
@@ -505,7 +570,7 @@ int main(int argc, char** argv) {
   fb = buf;
   loadSpoilers();
   printf("%zu places, %zu days in the spoiler file\n", places.size(), days.size());
-  testSeal(); testAstro(); testNmea(); testDrift(); testEar(); testSounding(); testFormat(); testHorizon();
+  testSeal(); testAstro(); testNmea(); testDrift(); testEar(); testSounding(); testFormat(); testHorizon(); testPro();
   if (argc < 2 || strcmp(argv[1], "quick")) longRun();
   printf(fails ? "\n%d CHECKS FAILED\n" : "\nall checks passed\n", fails);
   return fails ? 1 : 0;

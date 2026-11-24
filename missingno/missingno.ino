@@ -105,6 +105,7 @@ struct NetJob {
 struct NetResult {
   volatile bool wxFresh = false, geoDone = false, geoOk = false;
   int wmo = -1; float cloud = 0.3f, tempC = 12, humid = 60, press = 1013, trend = 0, windKmh = 0, windDir = 0, visKm = 20;
+  bool haveTz = false; int32_t utcOffset = 0;            // the local clock there, by the weather service's reckoning
   double geoLat = 0, geoLon = 0;
 };
 struct KinSeen { uint32_t id; uint32_t ms; float rootHz; char scrap[40]; bool scrapNew; };
@@ -421,6 +422,7 @@ static void readImu(mn::Senses& in) {
   motionE += (jolt - motionE) * (jolt > motionE ? 0.5f : 0.06f);
   float m = motionE / 0.55f; in.motion = m > 1 ? 1 : m;
   float mag = sqrtf(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]);
+  in.accG = mag; in.grav[0] = gx; in.grav[1] = gy; in.grav[2] = gz;
   fallRun = mag < 0.3f ? fallRun + 1 : 0;
   in.freefall = fallRun >= 3;
   float gl = sqrtf(gx * gx + gy * gy + gz * gz); if (gl < 0.2f) gl = 0.2f;
@@ -806,7 +808,7 @@ static bool fetchWeather(double lat, double lon) {
   HTTPClient http;
   String url = String("http://api.open-meteo.com/v1/forecast?latitude=") + String(lat, 2) + "&longitude=" + String(lon, 2)
     + "&current=weather_code,cloud_cover,temperature_2m,relative_humidity_2m,pressure_msl,wind_speed_10m,wind_direction_10m,visibility"
-    + "&hourly=pressure_msl&past_hours=3&forecast_hours=1&timezone=UTC";
+    + "&hourly=pressure_msl&past_hours=3&forecast_hours=1&timezone=auto";
   http.setConnectTimeout(8000); http.setTimeout(8000);
   if (!http.begin(url)) return false;
   int code = http.GET();
@@ -816,6 +818,7 @@ static bool fetchWeather(double lat, double lon) {
   int cp = 0, ce = 0;
   if (!jsonObjectScope(body, "current", cp, ce)) return false;
   double v = 0;
+  if (jsonNumber(body, "utc_offset_seconds", v)) { netRes.utcOffset = (int32_t)v; netRes.haveTz = true; }
   if (!jsonNumber(body, "weather_code", v, cp, ce)) return false;
   netRes.wmo = (int)v;
   if (jsonNumber(body, "cloud_cover", v, cp, ce)) netRes.cloud = constrain((float)v / 100.0f, 0.0f, 1.0f);
@@ -1273,6 +1276,7 @@ static void serviceWeather(mn::Senses& in) {
     netRes.wxFresh = false;
     in.haveWx = true; in.wmo = netRes.wmo; in.cloud = netRes.cloud; in.tempC = netRes.tempC; in.humid = netRes.humid;
     in.pressHpa = netRes.press; in.pressTrend = netRes.trend; in.windKmh = netRes.windKmh; in.windDir = netRes.windDir; in.visKm = netRes.visKm;
+    in.haveTz = netRes.haveTz; in.utcOffset = netRes.utcOffset;
   }
   if (wifiStage != WS_ONLINE || !in.haveFix || netJob.wantWx) return;
   double dLat = in.lat - wxLat, dLon = (in.lon - wxLon) * cos(in.lat * 0.0174533);
@@ -1285,6 +1289,23 @@ static void serviceWeather(mn::Senses& in) {
 
 static void pushFrame() {
   M5Cardputer.Display.pushImage(0, 0, mn::W, mn::H, mn::fb);
+}
+
+// Its own works, for the instruments: the link, the heap, where its memory is.
+static void serviceSelf(mn::Senses& in) {
+  static uint32_t lastMs = 0;
+  uint32_t now = millis();
+  if (lastMs && now - lastMs < 1000) return;
+  lastMs = now;
+  in.online = wifiStage == WS_ONLINE && WiFi.status() == WL_CONNECTED;
+  if (in.online) {
+    IPAddress ip = WiFi.localIP();
+    for (int i = 0; i < 4; i++) in.ip[i] = ip[i];
+    in.wifiRssi = WiFi.RSSI();
+  }
+  in.ota = otaReady;
+  in.heapFree = ESP.getFreeHeap();
+  in.store = storeFs == &SD ? 1 : (storeFs ? 2 : 0);
 }
 
 // ---------------------------------------------------------------------- setup
@@ -1390,6 +1411,7 @@ void loop() {
   serviceWeather(in);
   serviceAntenna(in);
   serviceBattery(in);
+  serviceSelf(in);
   if (portalOpen) portalServer.handleClient();
   in.card = cardState; in.cardGB = cardGB;
   if (mn::S.wantFormat) { mn::S.wantFormat = false; cardFormat(); }

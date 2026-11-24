@@ -37,8 +37,9 @@ Fn with the arrow keys: **fn ;** / **fn .** volume up/down, **fn ,** / **fn /**
 previous/next view, **fn `** back.
 
 Words it obeys: `help`, `wifi`, `mute`, `unmute`, `vol 0`–`vol 9`, `spiral`,
-`chart`, `ear`, `shore`, `save`, and `forget` (typed twice, it erases
-everything it remembers).
+`chart`, `ear`, `shore`, `save`, `pro` (the instruments, below), `format`
+(typed twice, it erases a card it cannot read and makes it its own), and
+`forget` (typed twice, it erases everything it remembers).
 
 ### The views
 
@@ -54,6 +55,36 @@ everything it remembers).
   measured, the radio count, pressure, moon, tide, sky, and the five slow dials
   it lives by.
 - **drift** — the hundredth-of-a-degree squares of the earth it has stood in.
+
+### pro: the instruments
+
+Type `pro` and the shore gives way to a dashboard of everything it can
+sense, laid out by **reach**: how far away the thing each instrument
+measures is, from its own body out to the sun.
+
+| reach | | instruments |
+|---|---|---|
+| SELF | 0 m | power, memory, link (enter opens Wi-Fi setup), system |
+| HAND | 1 m | level (a bubble lying flat; roll and pitch upright), motion (g, spin, falls), steps, wires |
+| ROOM | 10 m | meter (level, spectrum, history), tuner, echo (enter strikes the room), knock (tempo) |
+| RF | 100 m | ether (the Wi-Fi networks it hears), kin |
+| AIR | 10 km | temperature and dew point, pressure and its trend, wind, weather |
+| LAND | 100 km | position, horizon (the real skyline and its highest point), drift |
+| SAT | 20,000 km | GPS, clock (local, UTC, and by the sun) |
+| SKY | 1 AU | sun (rise and set, and when it meets your ridge), moon, tide |
+
+`,` and `/` (the left and right arrows) walk outward and back, and `;` and
+`.` (up and down) pick an instrument. Enter opens it. In an open
+instrument, enter uses it where there is something to do (strike the room,
+reset a peak), backspace closes it, and the arrows go on through the rest.
+Escape returns to the shore. Once you have started typing, those keys type.
+`pro tuner`, or any instrument's name, goes straight to that one. The
+creature keeps living underneath, and what it says runs along the bottom
+line.
+
+The meter reads decibels below the microphone's full scale, not calibrated
+sound pressure. Local time comes from the weather service's time zone for
+where it is; without that, the clock shows UTC.
 
 ### What it can sense
 
