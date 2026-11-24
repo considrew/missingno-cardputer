@@ -7,6 +7,7 @@
 #include "mn_synth.h"
 #include "mn_lexicon.h"
 #include "mn_horizon.h"
+#include "mn_pro.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -189,7 +190,7 @@ static void tickSky(float dt) {
         if (M.prevSunEl < -0.8f && sky.sunEl >= -0.8f) { sayPool(L_DAWN, 8, 1); differ(0.1f); note(N_BELL, deg(4), 0.6f); }
         if (M.prevSunEl >= -0.8f && sky.sunEl < -0.8f) { sayPool(L_DUSK, 8, 1); differ(0.1f); note(N_BELL, deg(0), 0.6f); }
       }
-      M.prevSunEl = sky.sunEl; M.skyValid = true;
+      M.prevSunEl = sky.sunEl; M.skyValid = true; S.solarHour = sky.solarHour;
     } else {
       // No clock, no place: it keeps a permanent deep twilight of its own.
       M.skyValid = false; M.skyAge = 0;
@@ -707,6 +708,7 @@ void mindTick() {
   float dt = clampf(in.dt, 0.001f, 0.25f);
   S.t += dt; S.frame++; S.hintAge += dt; S.sayAge += dt;
   for (Later& l : M.later) if (l.on && S.t >= l.at) { S.notes.push(l.n); l.on = false; }
+  proTick(dt);                                     // before the census is consumed
   tickSky(dt); tickWeather(dt); tickPlace(dt); tickEther(); tickHearing(dt); tickBody(dt); tickKin();
   tickAffect(dt); tickSleep(dt); tickMuse(dt); tickFace(dt); tickRidge(dt); tickSpiral(dt); tickSound(dt); tickLight(dt);
   Life& L = life();
@@ -771,7 +773,7 @@ static void command(char* line) {
   if (!strcmp(w, "help") || !strcmp(w, "?")) {
     static const char* const HELP[4] = {
       "type to it. enter alone strikes the room. tab turns the view.",
-      "words it obeys: wifi. mute. vol 0-9. spiral. chart. ear. shore.",
+      "words it obeys: wifi. mute. vol 0-9. spiral. chart. ear. shore. pro.",
       "hum and hold. knock a rhythm. carry it. forget, twice, erases.",
       "format, twice, erases a card it cannot read and makes it its own."};
     mindSay(HELP[M.helpN % 4], 9.0f, 2, false); M.helpN++; return;
@@ -814,6 +816,22 @@ static void command(char* line) {
   if (!strcmp(w, "ear") || !strcmp(w, "sounding")) { setView(V_SOUNDING); return; }
   if (!strcmp(w, "shore") || !strcmp(w, "back")) { setView(V_SHORE); return; }
   if (!strcmp(w, "save")) { S.wantSave = true; mindSay("kept.", 3.0f, 2, false); return; }
+  // the instruments, laid out by reach; "pro tuner" goes straight to one
+  if (!strcmp(w, "pro") || !strncmp(w, "pro ", 4)) {
+    const char* which = w[3] ? w + 4 : "";
+    while (*which == ' ') which++;
+    if (*which) {
+      bool was = S.pro;
+      if (!proGoto(which)) { char b[64]; snprintf(b, sizeof(b), "i have no %s.", which); mindSay(b, 4.0f, 2, false); return; }
+      S.pro = true; if (!was) S.proAge = 0;
+      return;
+    }
+    S.pro = !S.pro; S.proOpen = false; S.proAge = 0;
+    if (S.pro) { char b[64]; snprintf(b, sizeof(b), "%d instruments, by how far they reach.", proToolCount()); mindSay(b, 5.0f, 2, false); }
+    else mindSay("back to the shore.", 3.0f, 2, false);
+    note(N_BELL, deg(S.pro ? 4 : 0), 0.5f);
+    return;
+  }
 
   // anything else is offered to it
   OracleCtx c;
@@ -830,6 +848,7 @@ static void command(char* line) {
 
 void mindKey(int c) {
   wake(); S.hintAge = 99; M.keyHeat = 1.0f;
+  if (proKey(c)) return;                           // the dashboard's arrows, enter and escape
   int len = (int)strlen(S.typed);
   if (c == K_ENTER) {
     if (len == 0) { strike(); return; }
@@ -841,7 +860,9 @@ void mindKey(int c) {
   }
   if (c == K_BACK) { if (len > 0) { S.typed[len - 1] = 0; note(N_PLUCK, deg(-3), 0.35f); } return; }
   if (c == K_ESC) {
-    if (len > 0) S.typed[0] = 0; else if (S.view != V_SHORE) setView(V_SHORE); else S.sayAge = 99;
+    if (len > 0) S.typed[0] = 0;
+    else if (S.pro) { S.pro = false; S.proOpen = false; note(N_BELL, deg(0), 0.4f); }
+    else if (S.view != V_SHORE) setView(V_SHORE); else S.sayAge = 99;
     return;
   }
   if (c == K_TAB || c == K_VIEW_NEXT) { setView(S.view + 1); return; }

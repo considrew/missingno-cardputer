@@ -1,5 +1,6 @@
 #include "mn_draw.h"
 #include "mn_horizon.h"
+#include "mn_pro.h"
 #include <math.h>
 #include <string.h>
 #include <stdio.h>
@@ -854,6 +855,7 @@ static void drawChart() {
 
 // =============================================================== entry points
 void drawFrame() {
+  if (S.pro) { drawPro(); return; }
   switch (S.view) {
     case V_SPIRAL: drawSpiral(); break;
     case V_SOUNDING: drawSounding(); break;

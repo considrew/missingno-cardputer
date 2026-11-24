@@ -149,6 +149,19 @@ int textN(int x, int y, const char* s, int n, uint16_t c) {
 }
 
 int text(int x, int y, const char* s, uint16_t c) { return textN(x, y, s, 1 << 20, c); }
+
+int textBig(int x, int y, const char* s, uint16_t c, int k) {
+  for (; *s; s++) {
+    char ch = *s;
+    if (ch < 0x20 || ch > 0x7E) ch = '?';
+    const uint8_t* g = FONT[ch - 0x20];
+    for (int col = 0; col < 5; col++)
+      for (int row = 0; row < 8; row++)
+        if (g[col] & (1 << row)) rect(x + col * k, y + row * k, k, k, c);
+    x += 6 * k;
+  }
+  return x;
+}
 int textWidth(const char* s) { return (int)strlen(s) * 6; }
 void textCenter(int cx, int y, const char* s, uint16_t c) { text(cx - textWidth(s) / 2, y, s, c); }
 void textRight(int xr, int y, const char* s, uint16_t c) { text(xr - textWidth(s) + 1, y, s, c); }

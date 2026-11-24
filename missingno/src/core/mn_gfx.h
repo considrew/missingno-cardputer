@@ -56,6 +56,8 @@ int textWidth(const char* s);
 void textCenter(int cx, int y, const char* s, uint16_t c);
 void textRight(int xr, int y, const char* s, uint16_t c);
 void glyph(int x, int y, char ch, uint16_t c);
+// The same font, each dot k x k pixels (a 6k-wide cell). Returns the x after the last glyph.
+int textBig(int x, int y, const char* s, uint16_t c, int k);
 
 // Cheap deterministic hashes (visual noise, star fields, glitches).
 inline uint32_t hash32(uint32_t x) {

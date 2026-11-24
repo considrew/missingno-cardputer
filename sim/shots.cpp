@@ -1,6 +1,7 @@
 // Host-side look at the renderer: writes PPM frames for a set of staged scenes.
 #include "../missingno/src/core/mn_draw.h"
 #include "../missingno/src/core/mn_horizon.h"
+#include "../missingno/src/core/mn_pro.h"
 #include <vector>
 #include <stdio.h>
 #include <string.h>
@@ -109,6 +110,42 @@ int main(int argc, char** argv) {
       drawFrame(); dump("18_hz_haze");
       S = State();
     }
+  }
+  // 20.. pro: every reach, then some tools opened
+  {
+    S = State(); S.t = 4000; S.frame = 99000; S.hintAge = 99; S.pro = true; S.proAge = 9;
+    Senses& in = S.in;
+    in.haveTime = true; in.utc = 1795548600.0; in.haveTz = true; in.utcOffset = -8 * 3600;
+    in.haveFix = true; in.gpsFix = true; in.lat = 47.6062; in.lon = -122.3321; in.sats = 9; in.altM = 61; in.speedKmh = 4.2f;
+    in.haveWx = true; in.wmo = 61; in.cloud = 0.85f; in.tempC = 7.4f; in.humid = 86; in.pressHpa = 1006.8f; in.pressTrend = -1.9f; in.windKmh = 24; in.windDir = 205; in.visKm = 11;
+    in.apCount = 19; in.apRssi = -44; in.etherNovelty = 0.12f; in.etherVisits = 31; in.peers = 0;
+    in.battV = 3.93f; in.online = true; in.ip[0] = 192; in.ip[1] = 168; in.ip[2] = 1; in.ip[3] = 40; in.wifiRssi = -58; in.ota = true; in.heapFree = 143000;
+    in.store = 1; in.card = 1; in.cardGB = 62.2f; in.antenna = -1; in.steps = 2304;
+    in.pitchHz = 221.6f; in.floorDb = -63; in.grav[0] = 0.03f; in.grav[1] = 0.99f; in.grav[2] = -0.05f; in.tilt = 1.7f; in.spin = 12;
+    for (int b = 0; b < 8; b++) in.bands[b] = 0.25f + 0.5f * fabsf(sinf(b * 0.8f + 0.4f));
+    S.scene.sunEl = 9.5f; S.scene.sunAz = 211; S.scene.moonEl = 22; S.scene.moonAz = 96; S.scene.moonPhase = 0.18f; S.scene.tide = 0.42f;
+    S.sounding.valid = true; S.sounding.tailMs = 412; S.sounding.verdict = 3; S.sounding.floorDb = -64;
+    for (int i = 0; i < 60; i++) S.sounding.env[i] = (uint8_t)(250 * expf(-i / 16.0f) + 10);
+    S.solarHour = 12.9f; S.sound.rootHz = 98; S.cellsKnown = 212; S.linesCrossed = 3; S.placesFound = 2;
+    for (int i = 0; i < 400; i++) {                         // some history
+      in.levelDb = -52 + 14 * sinf(i * 0.07f) + 6 * sinf(i * 0.31f); in.accG = 1.0f + 0.25f * fabsf(sinf(i * 0.2f)) * (i > 300);
+      in.onset = (i % 21) == 0 && i > 330; in.etherFresh = (i % 40) == 0; in.apCount = 14 + (i / 40) % 6;
+      S.t += 1 / 30.0f; proTick(1 / 30.0f);
+    }
+    in.onset = false; in.etherFresh = false; in.levelDb = -41; in.accG = 1.02f;
+    static const char* const BN[8] = {"self", "hand", "room", "rf", "air", "land", "sat", "sky"};
+    for (int b = 0; b < 8; b++) {
+      S.proBand = b; S.proTool = 0; S.proOpen = false;
+      char nm[40]; snprintf(nm, sizeof(nm), "2%d_pro_%s", b, BN[b]); drawFrame(); dump(nm);
+    }
+    static const char* const OPEN[] = {"meter", "tuner", "level", "echo", "horizon", "sun", "wind", "moon"};
+    for (int i = 0; i < 8; i++) {
+      proGoto(OPEN[i]);
+      char nm[40]; snprintf(nm, sizeof(nm), "3%d_open_%s", i, OPEN[i]); drawFrame(); dump(nm);
+    }
+    strcpy(S.typed, "pro tun"); S.proOpen = false; S.proBand = 2; S.proTool = 1; drawFrame(); dump("38_pro_typing");
+    S.typed[0] = 0; strcpy(S.say, "the land rises to the south-east. the highest of it is 87 km away."); S.sayAge = 4; S.sayHold = 9; drawFrame(); dump("39_pro_speaking");
+    S = State();
   }
   // font specimen
   clear(C_VOID);
