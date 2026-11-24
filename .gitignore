@@ -6,3 +6,6 @@ sim/out/
 tools/SPOILERS_places.txt
 # the over-the-air update password for this one device
 missingno/ota_secret.h
+# a pre-rendered horizon says where the device lives
+missingno/horizon_local.h
+tools/horizon_out/

@@ -45,7 +45,8 @@ everything it remembers).
 - **shore** — the mark on its strip of land and water. The sky is computed
   from the clock and the position: the real sun and moon, the moon's phase,
   an idealised tide. Weather arrives as cloud, fog, rain, snow and lightning.
-  The skyline on the horizon is drawn by sound.
+  The skyline on the horizon is drawn by sound. Behind it, if you give it
+  one, stand the real hills and mountains of where it is (see below).
 - **having-been** — a conical spiral of how much the world has been
   *differing*. Novelty widens it, repetition tightens it. Event marks leave the
   ring as lines of flight. When it fills, the past is folded in half.
@@ -128,6 +129,52 @@ script uses the system `/usr/bin/python3`.
 
 Anyone without the key who tries gets refused, and it says so.
 
+### The real horizon
+
+The shore can show the land that actually stands around you: the near
+ground, the hills across the valley, the far ranges, each paler with
+distance. It is pre-rendered on your computer from public elevation data and
+then carried by the device:
+
+```bash
+python3 tools/horizon.py --town "Innsbruck"
+python3 tools/horizon.py --lat 47.61 --lon -122.33 --radius-km 8 --step-km 1
+```
+
+For every point of a grid around the place (17 x 17 points a kilometre apart
+by default, about a minute's work) it casts 720 rays out to 200 km and keeps,
+for each degree of the compass, how high the land stands above the level
+line, allowing for the curve of the earth and the bending of light near the
+ground. That skyline is flattened onto the shore's own vertical scale, the
+square-root curve the sun and moon are placed on, so the sun goes behind
+your ridge at the minute it really does, the moon comes up from behind it,
+and the high crests catch the light at dusk after the valley has lost it.
+Haze and fog take the far ranges first, by the visibility in the weather.
+The device notices the sun going behind the land and says so.
+
+Elevation comes from [USGS 3DEP](https://www.usgs.gov/3d-elevation-program)
+(1 arc-second, bare earth) inside the US and
+[Copernicus GLO-30](https://spacedata.copernicus.eu/collections/copernicus-digital-elevation-model)
+everywhere else. Only the tiles, and the resolution each distance needs, are
+fetched; they are cached in `~/.cache/missingno-dem`, so the first run
+downloads a few tens of megabytes and later runs nothing. Needs `numpy`, and
+`Pillow` for the preview.
+
+It writes `tools/horizon_out/horizon.bin`, a preview `horizon.png`, and
+`missingno/horizon_local.h`. Build and upload (over Wi-Fi is fine) and the
+horizon is part of the firmware; or copy `horizon.bin` to the card as
+`/missingno/horizon.bin`, which wins over the built-in one. Away from the
+grid it falls back to the plain horizon. Both files say where you live, so
+both are kept out of git.
+
+Running it asks AWS (Copernicus), USGS, and, for `--town`, Open-Meteo's
+place search for data about that area. Nothing is sent from the device.
+
+Copernicus DEM: produced using Copernicus WorldDEM-30 © DLR e.V. 2010-2014
+and © Airbus Defence and Space GmbH 2014-2018, provided under COPERNICUS by
+the European Union and ESA; all rights reserved. USGS 3DEP is in the public
+domain.
+
 ### What leaves the device
 
 - Weather requests to Open-Meteo, with the position rounded to two decimals
@@ -179,6 +226,7 @@ experimental; leave the pins unconnected or attach short bare wires.
 missingno/missingno.ino    the body: pins, audio task, Wi-Fi, GPS, storage, kin
 missingno/src/core/        the mind, renderer, synth and ear (no hardware in here)
 sim/                       host simulator and tests (clang++ on a Mac or Linux)
+tools/horizon.py           pre-renders the real horizon around a place
 tools/seal_places.py       seals the hidden places into mn_places.h
 tools/SPOILERS_places.txt  the hidden places in plain text: don't open it
 ```

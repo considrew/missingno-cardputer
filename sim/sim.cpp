@@ -10,6 +10,7 @@
 #include "../missingno/src/core/mn_synth.h"
 #include "../missingno/src/core/mn_ear.h"
 #include "../missingno/src/core/mn_lexicon.h"
+#include "../missingno/src/core/mn_horizon.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -294,6 +295,74 @@ static void testFormat() {
   S.wantFormat = false; S.in.card = 0;
 }
 
+// The pre-rendered horizon: the file is read a point at a time, the nearest point wins,
+// off the grid there are no mountains, and a damaged file is refused.
+static std::vector<uint8_t> hzBytes;
+static bool hzRead(uint32_t off, void* dst, uint32_t n) {
+  if ((size_t)off + n > hzBytes.size()) return false;
+  memcpy(dst, hzBytes.data() + off, n); return true;
+}
+static void put16(size_t at, int v) { hzBytes[at] = (uint8_t)v; hzBytes[at + 1] = (uint8_t)(v >> 8); }
+static void put32(size_t at, int32_t v) { for (int i = 0; i < 4; i++) hzBytes[at + i] = (uint8_t)((uint32_t)v >> (8 * i)); }
+static void makeHorizon(int ny, int nx) {
+  const int L = 3, rec = 12 + L * HZ_NAZ;
+  hzBytes.assign(64 + (size_t)ny * nx * rec, 0);
+  memcpy(hzBytes.data(), "MNHZ", 4); hzBytes[4] = 1; hzBytes[5] = L; put16(6, HZ_NAZ);
+  put32(8, 47000000); put32(12, -122000000); put32(16, 9000); put32(20, 13000);   // about a kilometre
+  put16(24, ny); put16(26, nx); put16(28, rec); put16(30, 4); put16(32, 25); put16(34, 200);
+  for (int i = 0; i < ny * nx; i++) {
+    size_t b = 64 + (size_t)i * rec;
+    put16(b, 100 + i); hzBytes[b + 2] = 1; put16(b + 4, 1500); put16(b + 6, 250); put16(b + 8, 870);
+    for (int a = 0; a < HZ_NAZ; a++) hzBytes[b + 12 + 2 * HZ_NAZ + a] = 10;          // far: a low range all round
+    hzBytes[b + 12 + 2 * HZ_NAZ + 150] = (uint8_t)(40 + i);                          // and one peak, south-east
+    hzBytes[b + 12 + 90] = 60;                                                       // near: one hill to the east
+  }
+}
+static void testHorizon() {
+  printf("horizon:\n");
+  makeHorizon(3, 3);
+  CHECK(horizonOpen(hzRead, (uint32_t)hzBytes.size()), "a good file opens");
+  CHECK(HZ.points == 9 && HZ.bands == 3 && HZ.bandKm[2] == 200, "header read");
+  horizonAt(true, 47.0091, -121.9871);
+  CHECK(HZ.here && HZ.index == 4 && HZ.groundM == 104, "nearest point is the middle one (index %d)", HZ.index);
+  CHECK(fabsf(horizonHeight(2, 150.5f) - 44 / 255.0f) < 1e-4f, "a bin centre reads exactly");
+  CHECK(fabsf(horizonHeight(2, 151.0f) - 27 / 255.0f) < 1e-4f, "between bins it interpolates");
+  CHECK(fabsf(horizonHeight(2, 359.9f) - 10 / 255.0f) < 1e-4f && fabsf(horizonHeight(2, 0.2f) - 10 / 255.0f) < 1e-4f, "north wraps");
+  int band = -1; float a = horizonAngle(90.5f, &band);
+  CHECK(band == 0 && fabsf(a - powf(60 / 255.0f, 2) * 90.0f) < 1e-3f, "the near hill is the highest land to the east");
+  horizonAt(true, 47.0, -122.0);
+  CHECK(HZ.here && HZ.index == 0 && HZ.groundM == 100, "the south-west corner");
+  horizonAt(true, 47.0275, -121.974);
+  CHECK(HZ.here && HZ.index == 8, "just past the north-east corner still counts");
+  horizonAt(true, 47.5, -121.0);
+  CHECK(!HZ.here, "far off the grid: no mountains");
+  horizonAt(false, 47.009, -121.987);
+  CHECK(!HZ.here, "nowhere: no mountains");
+  CHECK(horizonHeight(2, 150.5f) == 0, "and nothing is drawn");
+  hzBytes[0] = 'X';
+  CHECK(!horizonOpen(hzRead, (uint32_t)hzBytes.size()) && !HZ.open, "a damaged file is refused");
+  makeHorizon(3, 3);
+  CHECK(!horizonOpen(hzRead, (uint32_t)hzBytes.size() - 1), "a short file is refused");
+  put16(28, 999);
+  CHECK(!horizonOpen(hzRead, (uint32_t)hzBytes.size()), "a wrong record size is refused");
+  makeHorizon(1, 1);
+  CHECK(horizonOpen(hzRead, (uint32_t)hzBytes.size()), "a single point opens");
+  horizonAt(true, 47.05, -122.05);
+  CHECK(HZ.here && HZ.offKm < 10, "a single point stands for its town (%.1f km)", HZ.offKm);
+  horizonAt(true, 47.3, -122.0);
+  CHECK(!HZ.here, "but not for the next town");
+
+  // the mind says what the land is like, once
+  makeHorizon(3, 3); horizonOpen(hzRead, (uint32_t)hzBytes.size());
+  mindInit(11);
+  S.in = Senses(); S.in.haveFix = true; S.in.lat = 47.009; S.in.lon = -121.987;
+  bool said = false;
+  for (int i = 0; i < 30 * 20 && !said; i++) { S.in.dt = 1 / 30.0f; mindTick(); said = strstr(S.say, "south-east") != nullptr; }
+  CHECK(said && strstr(S.say, "87 km"), "it says where the land rises: %s", S.say);
+  printf("  %s\n", S.say);
+  horizonClose();
+}
+
 static void longRun() {
   printf("life:\n");
   S = State(); lifeReset(); fb = buf;
@@ -436,7 +505,7 @@ int main(int argc, char** argv) {
   fb = buf;
   loadSpoilers();
   printf("%zu places, %zu days in the spoiler file\n", places.size(), days.size());
-  testSeal(); testAstro(); testNmea(); testDrift(); testEar(); testSounding(); testFormat();
+  testSeal(); testAstro(); testNmea(); testDrift(); testEar(); testSounding(); testFormat(); testHorizon();
   if (argc < 2 || strcmp(argv[1], "quick")) longRun();
   printf(fails ? "\n%d CHECKS FAILED\n" : "\nall checks passed\n", fails);
   return fails ? 1 : 0;

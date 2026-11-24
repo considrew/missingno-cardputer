@@ -6,6 +6,7 @@
 #include "mn_drift.h"
 #include "mn_synth.h"
 #include "mn_lexicon.h"
+#include "mn_horizon.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -43,6 +44,8 @@ static struct Mind {
   float modeHold; uint8_t mode; float root;
   // ridge / spiral
   uint8_t markNext, pendEv; float ridgeH;
+  // the land that is really there
+  bool hzSaid; int sunBehind;
   // commands
   float forgetArmed, formatArmed; uint32_t stepsAtBoot; int lines;
   Later later[12];
@@ -143,6 +146,34 @@ static float lerpAngle(float a, float b, float k) {
   return r < 0 ? r + 360.0f : (r >= 360.0f ? r - 360.0f : r);
 }
 
+// Said once a wake, when it first knows the shape of the land; and the sun going behind
+// a real ridge, which happens before (or after) the flat horizon says it should.
+static const char* const DIRN[8] = {"north", "north-east", "east", "south-east", "south", "south-west", "west", "north-west"};
+static void tickLand() {
+  if (!HZ.here) { M.sunBehind = 0; return; }
+  if (!M.hzSaid && S.t > 14.0f && S.sleep < 0.5f) {
+    char b[84];
+    if (HZ.peakAng >= 0.35f)
+      snprintf(b, sizeof(b), "the land rises to the %s. the highest of it is %d km away.",
+               DIRN[(int)((HZ.peakAz + 22.5f) / 45.0f) & 7], (int)(HZ.peakKm + 0.5f));
+    else snprintf(b, sizeof(b), "the horizon here is level. nothing stands between me and the edge.");
+    mindSay(b, 8.0f, 1, false);
+    M.hzSaid = true;
+  }
+  if (!M.skyValid || M.skyAge < 20.0f || S.sleep >= 0.5f) { M.sunBehind = 0; return; }
+  float ridge = horizonAngle(sky.sunAz);
+  int behind = (sky.sunEl > 0.3f && sky.sunEl < ridge) ? 2 : (sky.sunEl >= ridge && sky.sunEl > 0.3f ? 1 : 0);
+  if (M.sunBehind == 1 && behind == 2) {
+    mindSay(sky.solarHour > 12.0f ? "the sun has gone behind the land. the sky has not noticed yet."
+                                  : "the sun is up there somewhere, behind the land.", 8.0f, 1, false);
+    note(N_BELL, deg(0), 0.5f); differ(0.06f);
+  } else if (M.sunBehind == 2 && behind == 1) {
+    mindSay(sky.solarHour < 12.0f ? "the sun has cleared the ridge." : "the sun came out from behind the land.", 7.0f, 1, false);
+    note(N_BELL, deg(4), 0.5f); differ(0.06f);
+  }
+  if (behind) M.sunBehind = behind;
+}
+
 static void tickSky(float dt) {
   Senses& in = S.in; Life& L = life(); SceneP& sc = S.scene;
   M.skyAcc += dt;
@@ -150,6 +181,8 @@ static void tickSky(float dt) {
     M.skyAcc = 0; M.skyInit = true;
     M.havePos = in.haveFix || L.haveLast;
     M.lat = in.haveFix ? in.lat : L.lastLat; M.lon = in.haveFix ? in.lon : L.lastLon;
+    horizonAt(M.havePos, M.lat, M.lon);
+    tickLand();
     if (in.haveTime && M.havePos) {
       astro(in.utc, M.lat, M.lon, sky);
       if (M.skyValid && M.skyAge > 20.0f && S.sleep < 0.5f) {
