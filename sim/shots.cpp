@@ -1,5 +1,7 @@
 // Host-side look at the renderer: writes PPM frames for a set of staged scenes.
 #include "../missingno/src/core/mn_draw.h"
+#include "../missingno/src/core/mn_horizon.h"
+#include <vector>
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
@@ -22,7 +24,12 @@ static void ridge() {
   }
   S.ridgeMark[30] = 1; S.ridgeMark[66] = 2; S.ridgeMark[201] = 3; S.ridgeMark[214] = 1;
 }
-int main() {
+static std::vector<uint8_t> hz;
+static bool hzRead(uint32_t off, void* dst, uint32_t n) {
+  if ((size_t)off + n > hz.size()) return false;
+  memcpy(dst, hz.data() + off, n); return true;
+}
+int main(int argc, char** argv) {
   fb = buf; ridge();
   for (int b = 0; b < 8; b++) S.in.bands[b] = 0.15f + 0.5f * fabsf(sinf(b * 1.3f));
   S.t = 12.3f; S.frame = 370; S.hintAge = 99;
@@ -80,6 +87,29 @@ int main() {
   drawFrame(); dump("10_chart");
   drawBoot(1.2f); dump("11_boot_a"); drawBoot(3.2f); dump("12_boot_b");
   drawPortal("missingno", "192.168.4.1", ""); dump("13_portal");
+  // 15.. the real horizon, if a horizon.bin is given: sunset alpenglow, moonrise over it, day, haze
+  if (argc > 1) {
+    FILE* f = fopen(argv[1], "rb");
+    if (f) { int c; while ((c = fgetc(f)) != EOF) hz.push_back((uint8_t)c); fclose(f); }
+    if (horizonOpen(hzRead, (uint32_t)hz.size())) {
+      double lat = argc > 3 ? atof(argv[2]) : 0, lon = argc > 3 ? atof(argv[3]) : 0;
+      if (argc <= 3) {   // the middle of the grid
+        lat = ((int32_t)(hz[8] | hz[9] << 8 | hz[10] << 16 | hz[11] << 24) + (hz[24] / 2) * (int32_t)(hz[16] | hz[17] << 8 | hz[18] << 16 | hz[19] << 24)) * 1e-6;
+        lon = ((int32_t)(hz[12] | hz[13] << 8 | hz[14] << 16 | hz[15] << 24) + (hz[26] / 2) * (int32_t)(hz[20] | hz[21] << 8 | hz[22] << 16 | hz[23] << 24)) * 1e-6;
+      }
+      horizonAt(true, lat, lon);
+      S = State(); ridge(); S.t = 50; S.frame = 1500; S.hintAge = 99;
+      S.scene.sunEl = 1.8f; S.scene.sunAz = 238; S.scene.moonEl = -10; S.scene.cloud = 0.15f; S.scene.tide = 0.2f;
+      drawFrame(); dump("15_hz_alpenglow");
+      S.scene.sunEl = -20; S.scene.moonEl = 1.6f; S.scene.moonAz = 151; S.scene.moonPhase = 0.5f; S.scene.cloud = 0.05f;
+      drawFrame(); dump("16_hz_moonrise");
+      S.scene.sunEl = 30; S.scene.sunAz = 200; S.scene.moonEl = -10; S.scene.cloud = 0.3f;
+      drawFrame(); dump("17_hz_day");
+      S.in.haveWx = true; S.in.visKm = 14; S.scene.cloud = 0.7f; S.scene.fog = 0.2f;
+      drawFrame(); dump("18_hz_haze");
+      S = State();
+    }
+  }
   // font specimen
   clear(C_VOID);
   text(2, 2,  " !\"#$%&'()*+,-./0123456789:;<=>?", C_BONE);

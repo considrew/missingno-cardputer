@@ -1,4 +1,5 @@
 #include "mn_draw.h"
+#include "mn_horizon.h"
 #include <math.h>
 #include <string.h>
 #include <stdio.h>
@@ -259,13 +260,22 @@ static void drawSky() {
   }
 }
 
+// The shore looks toward the equator: south in the north, north in the south, about
+// 200 degrees across. East is on the left looking south and on the right looking north.
+static constexpr float AZ_PER_PX = 90.0f / (W * 0.5f - 14);
+static inline float azAtX(const SceneP& sc, float x) { return (sc.south ? 0.0f : 180.0f) + (x - W * 0.5f) * AZ_PER_PX; }
+// Elevation runs up a square-root curve, so the first few degrees (where hills are) get room.
+static constexpr float EL_SCALE = HORIZON_Y - 20;          // px for the full 90 degrees
+
 static void placeBody(const SceneP& sc, float az, float el, int& x, int& y) {
   float d = az - (sc.south ? 0.0f : 180.0f);
   while (d > 180) d -= 360; while (d < -180) d += 360;
-  float xf = W * 0.5f + (sc.south ? -1.0f : 1.0f) * (d / 90.0f) * (W * 0.5f - 14);
+  float xf = W * 0.5f + d / AZ_PER_PX;
   x = iround(clampf(xf, 10, W - 10));
-  if (el >= 0) y = HORIZON_Y - 6 - iround(sqrtf(el / 90.0f) * (HORIZON_Y - 20));
-  else y = HORIZON_Y - 6 - iround(el * 1.6f);
+  // the centre of the disc sits on the same curve the land is drawn on, so a body
+  // goes behind a ridge at the moment it is really that high
+  if (el >= 0) y = HORIZON_Y - iround(sqrtf(el / 90.0f) * EL_SCALE);
+  else y = HORIZON_Y - iround(el * 1.6f);
 }
 
 static void drawStars(const SceneP& sc, uint32_t frame) {
@@ -408,6 +418,44 @@ static void drawOmen(const SceneP& sc, float t, uint32_t frame) {
 }
 
 // ============================================================ land and water
+// The ranges that are really there (tools/horizon.py), far to near, each paler with
+// distance. Haze and fog take the far ones first; at sunrise and sunset the high
+// crests catch the light the valley has already lost.
+static void drawMountains(const State& st) {
+  if (!HZ.here) return;
+  const SceneP& sc = st.scene;
+  float vis = st.in.haveWx ? st.in.visKm : 45.0f;
+  vis *= 1.0f - 0.92f * sc.fog;
+  vis *= 1.0f - 0.35f * sc.rain - 0.5f * sc.snow;
+  float glow = 0;
+  if (sc.sunEl > -1.5f && sc.sunEl < 7.0f) glow = (1.0f - fabsf(sc.sunEl - 1.5f) / 5.5f) * (1.0f - sc.cloud * 0.8f);
+  uint16_t alpen = mix(rgb(236, 120, 108), C_EMBER, 60);
+  int nb = HZ.bands;
+  for (int b = nb - 1; b >= 0; b--) {
+    float inner = b ? HZ.bandKm[b - 1] : 0.0f, outer = HZ.bandKm[b];
+    float typical = inner + (outer - inner) * (b == nb - 1 && nb > 1 ? 0.2f : 0.5f);
+    float seen = clampf(vis / (typical + 0.5f), 0.0f, 1.0f);
+    seen = seen * seen * (3.0f - 2.0f * seen);
+    if (seen < 0.06f) continue;
+    float depth = nb > 1 ? (float)b / (nb - 1) : 0.0f;      // 0 nearest .. 1 farthest
+    int dark = (int)((214.0f - 104.0f * depth - dayAmt * (24.0f + 30.0f * depth)) * seen);
+    uint16_t c = mix(skyHor, C_VOID, dark);
+    uint16_t rim = mix(c, skyHor, 70);
+    for (int x = 0; x < W; x++) {
+      int h = iround(horizonHeight(b, azAtX(sc, (float)x)) * EL_SCALE);
+      if (h <= 0) continue;
+      int top = HORIZON_Y - h;
+      vline(x, top, h, c);
+      if (glow > 0.05f && depth > 0.4f) {
+        blend(x, top, alpen, (int)(200 * glow * seen));
+        blend(x, top + 1, alpen, (int)(90 * glow * seen));
+      } else if (b < nb - 1) {
+        px(x, top, rim);                                    // a nearer ridge holds an edge against the one behind
+      }
+    }
+  }
+}
+
 static int waterlineAt(const SceneP& sc, int x, float t) {
   float base = FEET_Y + 5.0f - sc.tide * 7.0f;
   return iround(base + sinf(x * 0.07f + t * 0.7f) * 1.3f + sinf(x * 0.19f - t * 1.1f) * 0.7f);
@@ -441,6 +489,7 @@ static void drawGround(const State& st) {
       if ((h & 31) == 0) blend(x, y, glint, 70);
     }
   }
+  drawMountains(st);
   // the skyline that sound drew
   for (int x = 0; x < W; x++) {
     int h = st.ridge[x];
@@ -618,8 +667,11 @@ static void drawShore() {
   drawOmen(sc, st.t, st.frame);
   drawClouds(sc, st.t);
   drawGround(st);
-  if (sc.sunEl > -3) drawGlitter(sc, sx, clampf(1.0f - sc.cloud, 0.1f, 1) * 0.6f, mix(C_BONE, C_EMBER, (int)(clampf(1 - sc.sunEl / 10, 0, 1) * 256)), st.t, st.frame);
-  if (sc.moonEl > 0) drawGlitter(sc, mx, mlit * (1.0f - dayAmt), rgb(220, 220, 205), st.t, st.frame);
+  // no road of light on the water from a sun or moon the land is hiding
+  bool sunHidden = HZ.here && sc.sunEl < horizonAngle(sc.sunAz) - 0.3f;
+  bool moonHidden = HZ.here && sc.moonEl < horizonAngle(sc.moonAz) - 0.3f;
+  if (sc.sunEl > -3 && !sunHidden) drawGlitter(sc, sx, clampf(1.0f - sc.cloud, 0.1f, 1) * 0.6f, mix(C_BONE, C_EMBER, (int)(clampf(1 - sc.sunEl / 10, 0, 1) * 256)), st.t, st.frame);
+  if (sc.moonEl > 0 && !moonHidden) drawGlitter(sc, mx, mlit * (1.0f - dayAmt), rgb(220, 220, 205), st.t, st.frame);
 
   // By day it is ink on a pale page; by night, bone on the dark. As on the site.
   uint16_t ink = mix(C_BONE, rgb(0x14, 0x14, 0x18), (int)(dayAmt * 256));

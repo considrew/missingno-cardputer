@@ -48,6 +48,11 @@
 #include "src/core/mn_ear.h"
 #include "src/core/mn_nmea.h"
 #include "src/core/mn_drift.h"
+#include "src/core/mn_horizon.h"
+#if __has_include("horizon_local.h")
+#include "horizon_local.h"        // MN_HORIZON_BLOB: the land around home, from tools/horizon.py. Kept out of git.
+#define MN_HAVE_HORIZON 1
+#endif
 
 // ------------------------------------------------------------------ the pins
 static constexpr int SAMPLE_RATE = 48000;
@@ -516,6 +521,32 @@ static bool storeSaveLife() {
 }
 
 // A plain-text diary on the card. It is allowed to be read.
+// ------------------------------------------------------------- the real horizon
+// tools/horizon.py pre-renders the skyline around a place. Read from the card (or the
+// flash store) if a horizon.bin is there, else from a copy built into the firmware.
+static File hzFile;
+static const char* hzFrom = "none";
+static bool hzReadFile(uint32_t off, void* dst, uint32_t n) {
+  return hzFile && hzFile.seek(off) && hzFile.read((uint8_t*)dst, n) == n;
+}
+#ifdef MN_HAVE_HORIZON
+static bool hzReadBlob(uint32_t off, void* dst, uint32_t n) {
+  if ((uint64_t)off + n > sizeof(MN_HORIZON_BLOB)) return false;
+  memcpy(dst, MN_HORIZON_BLOB + off, n);
+  return true;
+}
+#endif
+static void horizonBegin() {
+  if (storeFs && storeFs->exists("/missingno/horizon.bin")) {
+    hzFile = storeFs->open("/missingno/horizon.bin", FILE_READ);
+    if (hzFile && mn::horizonOpen(hzReadFile, hzFile.size())) { hzFrom = storeName; return; }
+    if (hzFile) hzFile.close();
+  }
+#ifdef MN_HAVE_HORIZON
+  if (mn::horizonOpen(hzReadBlob, sizeof(MN_HORIZON_BLOB))) hzFrom = "built in";
+#endif
+}
+
 static void journal(const char* what) {
   if (!storeFs) return;
   const char* path = "/missingno/havingbeen.log";
@@ -1296,6 +1327,7 @@ void setup() {
   mn::lifeReset();
   storeBegin();
   bool remembered = storeLoadLife();
+  horizonBegin();
 
   uint32_t seed = esp_random();
   mn::earInit();
@@ -1317,6 +1349,7 @@ void setup() {
 
   Serial.printf("missingno. imu %d mic %d keys %d store %s remembered %d grove-i2c %d ext.io %d wakes %lu\n",
                 imuReady, micReady, keysReady, storeName, remembered, groveIsI2C, extioReady, (unsigned long)mn::life().wakes);
+  Serial.printf("horizon: %s, %lu points\n", hzFrom, (unsigned long)mn::HZ.points);
   Serial.printf("card: %s, %.1f GB\n", cardState == 1 ? "in use" : cardState == 2 ? "present, unreadable" : "none", cardGB);
   Serial.printf("screen: board %d, %d x %d, rotation %d\n", (int)M5Cardputer.Display.getBoard(),
                 (int)M5Cardputer.Display.width(), (int)M5Cardputer.Display.height(),
