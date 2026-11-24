@@ -1,2 +1,8 @@
 .DS_Store
 **/build/
+sim/out/
+*.o
+# the hidden places in plain text: keep them out of any public copy
+tools/SPOILERS_places.txt
+# the over-the-air update password for this one device
+missingno/ota_secret.h
