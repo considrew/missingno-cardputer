@@ -12,6 +12,7 @@
 #include "../missingno/src/core/mn_lexicon.h"
 #include "../missingno/src/core/mn_horizon.h"
 #include "../missingno/src/core/mn_pro.h"
+#include "../missingno/src/core/mn_theremin.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -428,6 +429,152 @@ static void testPro() {
   S.pro = false; S.proOpen = false; horizonClose();
 }
 
+// The theremin: tilt is pitch, raising it is loudness, twisting trembles; the scales,
+// octaves and hold do what they say; and what comes out of the synth is that pitch.
+static void pose(float rollDeg, float leanDeg, float spin = 0) {
+  float r = rollDeg * 0.0174533f, l = leanDeg * 0.0174533f;
+  S.in.acc[0] = sinf(r); S.in.acc[1] = cosf(r) * sinf(l); S.in.acc[2] = cosf(r) * cosf(l);
+  S.in.spin = spin; S.in.gyro[0] = 0; S.in.gyro[1] = 0; S.in.gyro[2] = spin;
+}
+static void ticks(float secs) { for (int i = 0; i < (int)(secs * 30); i++) { S.in.dt = 1 / 30.0f; mindTick(); } }
+static float semisOf(float hz, float ref) { return 12.0f * log2f(hz / ref); }
+
+static void testTheremin() {
+  printf("theremin:\n");
+  mindInit(31); fb = buf; S.in = Senses();
+  pose(0, 10);
+  typeLine("theremin");
+  CHECK(S.theremin && strstr(S.say, "tilt"), "the word starts it and says how: %s", S.say);
+  ticks(2.0f);
+  float ref = 2.0f * S.sound.rootHz;
+  CHECK(fabsf(semisOf(S.sound.thereHz, ref)) < 0.05f, "level: the middle note (%.1f Hz, root %.1f)", S.sound.thereHz, S.sound.rootHz);
+  CHECK(S.sound.thereAmp > 0.95f, "nearly upright: full voice (%.2f)", S.sound.thereAmp);
+  pose(55, 10); ticks(0.5f);
+  CHECK(fabsf(semisOf(S.sound.thereHz, ref) - 18.0f) < 0.1f, "tilted all the way: an octave and a half up (%.2f st)", semisOf(S.sound.thereHz, ref));
+  pose(-27.5f, 10); ticks(0.5f);
+  CHECK(fabsf(semisOf(S.sound.thereHz, ref) + 9.0f) < 0.1f, "half the other way: nine down (%.2f st)", semisOf(S.sound.thereHz, ref));
+  pose(0, 47.5f); ticks(0.5f);
+  CHECK(fabsf(S.sound.thereAmp - 0.25f) < 0.03f, "leaned halfway back: quieter (%.2f)", S.sound.thereAmp);
+  pose(0, 80); ticks(0.5f);
+  CHECK(S.sound.thereAmp < 0.01f, "lying flat: silent");
+  pose(0, 10, 200); ticks(0.5f);
+  CHECK(S.sound.thereVib > 0.9f, "twisting: it trembles (%.2f)", S.sound.thereVib);
+  pose(0, 10, 0); ticks(2.0f);
+  CHECK(S.sound.thereVib < 0.05f, "still: the tremble dies away (%.2f)", S.sound.thereVib);
+  // chromatic: the nearest semitone, and it does not flicker between two
+  mindKey('/');
+  CHECK(S.thereScale == 1, "next scale: chromatic");
+  pose(3.3f / 18 * 55, 10); ticks(0.3f);
+  CHECK(fabsf(semisOf(S.sound.thereHz, ref) - 3.0f) < 0.01f, "3.3 semitones plays 3 (%.2f)", semisOf(S.sound.thereHz, ref));
+  pose(3.6f / 18 * 55, 10); ticks(0.3f);
+  CHECK(fabsf(semisOf(S.sound.thereHz, ref) - 3.0f) < 0.01f, "3.6 still plays 3: no flicker");
+  pose(3.8f / 18 * 55, 10); ticks(0.3f);
+  CHECK(fabsf(semisOf(S.sound.thereHz, ref) - 4.0f) < 0.01f, "3.8 moves to 4");
+  // a dark mode: every note it plays is in the mode
+  for (int i = 0; i < 2; i++) mindKey('/');
+  CHECK(S.thereScale == 3, "two more: aeolian (%d)", S.thereScale);
+  bool inMode = true;
+  for (float st = -17; st <= 17; st += 0.7f) {
+    pose(st / 18 * 55, 10); ticks(0.2f);
+    float got = semisOf(S.sound.thereHz, ref); bool ok = false;
+    for (int d = -16; d <= 16; d++) if (fabsf(got - 12.0f * log2f(modeRatio(0, d))) < 0.01f) ok = true;
+    if (!ok) inMode = false;
+  }
+  CHECK(inMode, "aeolian: only aeolian notes");
+  mindKey(','); mindKey(','); mindKey(','); CHECK(S.thereScale == 0, "back round to glide");
+  // octave, hold
+  pose(0, 10); ticks(0.5f);
+  mindKey(';'); ticks(0.3f);
+  CHECK(S.thereOct == 1 && fabsf(semisOf(S.sound.thereHz, ref) - 12.0f) < 0.05f, "up an octave");
+  mindKey('.'); mindKey('.'); ticks(0.3f);
+  CHECK(S.thereOct == -1 && fabsf(semisOf(S.sound.thereHz, ref) + 12.0f) < 0.05f, "down two");
+  mindKey(';'); ticks(0.3f);
+  float held = S.sound.thereHz;
+  mindKey(K_ENTER);
+  CHECK(S.thereHold, "enter holds");
+  pose(40, 70); ticks(0.5f);
+  CHECK(fabsf(S.sound.thereHz - held) < 0.01f && S.sound.thereAmp > 0.9f, "held: the hand can wander");
+  S.wantSounding = false; mindButton(false);
+  CHECK(!S.thereHold && !S.wantSounding, "the button lets go, and does not strike");
+  S.in.faceDown = true; ticks(0.2f);
+  CHECK(S.sound.thereAmp < 0.01f, "face down: silent");
+  S.in.faceDown = false;
+  for (int i = 0; i < 12; i++) drawFrame();
+  mindKey(K_ESC);
+  CHECK(!S.theremin && S.sound.thereAmp == 0, "escape ends it");
+  // from the dashboard, and back to it
+  typeLine("pro"); S.proBand = 1; S.proTool = 4; mindKey(K_ENTER);
+  CHECK(S.theremin && S.pro, "pro > hand > theremin, enter: it plays");
+  ticks(0.2f); drawFrame();
+  mindKey(K_ESC);
+  CHECK(!S.theremin && S.pro && !S.proOpen, "and escape is back on the dashboard");
+  S.pro = false;
+
+  // what comes out: the synth, alone with the theremin, at a known pitch
+  synthInit(5); synthDuck(1.0f);
+  SoundP keep = S.sound; S.sound = SoundP(); S.sound.drone = 0; S.sound.lead = 0; S.sound.master = 0.6f;
+  S.sound.thereHz = 330.0f; S.sound.thereAmp = 1; S.sound.thereVib = 0; S.sound.thereBright = 0; S.muted = false;
+  std::vector<int16_t> pcm(48000);
+  for (int i = 0; i < 48000; i += 480) synthRender(&pcm[i], 480);
+  // the period, by autocorrelation over a steady stretch
+  const int A = 30000, NW = 8192;
+  float bestR = -1; int bestL = 0; std::vector<float> rr(500, 0);
+  for (int L = 48000 / 600; L <= 48000 / 150; L++) {
+    double num = 0, e1 = 0, e2 = 0;
+    for (int i = 0; i < NW; i++) { double a = pcm[A + i], b = pcm[A + i + L]; num += a * b; e1 += a * a; e2 += b * b; }
+    rr[L] = (float)(num / sqrt(e1 * e2 + 1));
+    if (rr[L] > bestR) { bestR = rr[L]; bestL = L; }
+  }
+  for (int L = 48000 / 600; L <= 48000 / 150; L++)                 // the first peak that is nearly as good: not an octave below
+    if (rr[L] > 0.97f * bestR && rr[L] >= rr[L - 1] && rr[L] >= rr[L + 1]) { bestL = L; break; }
+  float y0 = rr[bestL - 1], y1 = rr[bestL], y2 = rr[bestL + 1];
+  float lag = bestL + 0.5f * (y0 - y2) / (y0 - 2 * y1 + y2);
+  float hz = 48000.0f / lag;
+  CHECK(fabsf(hz / 330.0f - 1.0f) < 0.005f, "it sounds at the pitch it was given (%.1f Hz)", hz);
+  float rms = 0; for (int i = 12000; i < 48000; i++) rms += (float)pcm[i] * pcm[i];
+  rms = sqrtf(rms / 36000);
+  // against the drone alone, at the same volume
+  synthInit(5); synthDuck(1.0f);
+  S.sound = SoundP(); S.sound.master = 0.6f; S.sound.lead = 0;
+  for (int i = 0; i < 48000; i += 480) synthRender(&pcm[i], 480);
+  float drms = 0; for (int i = 12000; i < 48000; i++) drms += (float)pcm[i] * pcm[i];
+  drms = sqrtf(drms / 36000);
+  CHECK(rms > 0.6f * drms && rms < 20000, "and it carries over the drone (rms %.0f, drone alone %.0f)", rms, drms);
+  S.sound = keep; S.sound.thereAmp = 0;
+  printf("  %.1f Hz out for 330 asked; rms %.0f against the drone's %.0f\n", hz, rms, drms);
+}
+
+// A short performance, for listening to: out/theremin.wav
+static void thereminWav() {
+  mindInit(77); synthInit(77); synthDuck(1.0f); S.in = Senses(); S.muted = false; S.sound.master = 0.66f;
+  pose(0, 88); typeLine("theremin"); S.hintAge = 99;
+  wavOpen("out/theremin.wav");
+  std::vector<int16_t> pcm(1600);
+  auto at = [](float st) { return st / 18.0f * 55.0f; };
+  for (int f = 0; f < 30 * 26; f++) {
+    float t = f / 30.0f, roll = 0, lean = 15, spin = 0;
+    if (t < 2.0f) { lean = 88 - 73 * (t / 2.0f); }                                  // raised from the table
+    else if (t < 5.0f) { roll = at(7.0f * (t - 2.0f) / 3.0f); }                      // a slow slide up a fifth
+    else if (t < 7.5f) { roll = at(7); spin = 150; }                                   // and held, trembling
+    else if (t < 9.0f) { roll = at(7 + 5 * (t - 7.5f) / 1.5f); }
+    else if (t < 11.0f) { roll = at(12) ; spin = 90; }
+    else if (t < 12.5f) { roll = at(12 - 9 * (t - 11.0f) / 1.5f); lean = 15 + 20 * (t - 11.0f) / 1.5f; }
+    else if (t < 21.0f) {                                                              // its mood, note by note
+      if (f == 30 * 12.5f) { mindKey('/'); mindKey('/'); }
+      static const float PH[] = {0, 2, 3, 5, 7, 8, 7, 3, 5, 2, 0, -2, 0, 0};
+      int k = (int)((t - 12.5f) / 0.62f); if (k > 13) k = 13;
+      roll = at(PH[k] + 0.3f * sinf(t * 3.0f)); lean = 15; spin = (k >= 12) ? 160 : 0;
+    } else { roll = at(0); lean = 15 + 75 * (t - 21.0f) / 4.0f; spin = 60; }        // laid back down
+    pose(roll, lean, spin);
+    S.in.dt = 1 / 30.0f; mindTick();
+    synthRender(pcm.data(), 1600);
+    fwrite(pcm.data(), 2, 1600, wav); wavN += 1600;
+  }
+  wavClose();
+  thereminStop();
+  printf("  wrote out/theremin.wav (26 s)\n");
+}
+
 static void longRun() {
   printf("life:\n");
   S = State(); lifeReset(); fb = buf;
@@ -570,8 +717,8 @@ int main(int argc, char** argv) {
   fb = buf;
   loadSpoilers();
   printf("%zu places, %zu days in the spoiler file\n", places.size(), days.size());
-  testSeal(); testAstro(); testNmea(); testDrift(); testEar(); testSounding(); testFormat(); testHorizon(); testPro();
-  if (argc < 2 || strcmp(argv[1], "quick")) longRun();
+  testSeal(); testAstro(); testNmea(); testDrift(); testEar(); testSounding(); testFormat(); testHorizon(); testPro(); testTheremin();
+  if (argc < 2 || strcmp(argv[1], "quick")) { thereminWav(); longRun(); }
   printf(fails ? "\n%d CHECKS FAILED\n" : "\nall checks passed\n", fails);
   return fails ? 1 : 0;
 }

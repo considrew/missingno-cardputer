@@ -6,6 +6,7 @@
 #include "mn_astro.h"
 #include "mn_drift.h"
 #include "mn_horizon.h"
+#include "mn_theremin.h"
 #include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -419,7 +420,8 @@ static void fLevel(Card& c) {
   computeLevel();
   float worst = maxf(fabsf(levX), fabsf(levY));
   snprintf(c.big, sizeof(c.big), "%.1f", levFlat ? sqrtf(levX * levX + levY * levY) : levX); strcpy(c.unit, "DEG");
-  snprintf(c.sub, sizeof(c.sub), levFlat ? "x %+.1f  y %+.1f" : "r %+.1f  p %+.1f", levX, levY);
+  snprintf(c.sub, sizeof(c.sub), levFlat ? "x%+.*f y%+.*f" : "r%+.*f p%+.*f",
+           fabsf(levX) < 9.95f ? 1 : 0, levX, fabsf(levY) < 9.95f ? 1 : 0, levY);
   c.tone = worst < 0.5f ? P_OK : P_TEXT;
   c.gfx = gLevel;
   row(c, "LYING", levFlat ? "flat" : "upright");
@@ -442,7 +444,7 @@ static void fMotion(Card& c) {
 }
 static void fSteps(Card& c) {
   snprintf(c.big, sizeof(c.big), "%lu", (unsigned long)S.in.steps); strcpy(c.unit, "WAKE");
-  snprintf(c.sub, sizeof(c.sub), "%d a minute", iround(P.cadence));
+  snprintf(c.sub, sizeof(c.sub), "%d/min", iround(P.cadence));
   row(c, "THIS WAKE", "%lu", (unsigned long)S.in.steps);
   row(c, "CADENCE", "%d / min", iround(P.cadence));
   row(c, "ABOUT", "%.2f km", S.in.steps * 0.00075f);
@@ -454,6 +456,21 @@ static void fWires(Card& c) {
   c.spark = &P.wires; c.sparkMax = 255; c.tone = S.in.antenna > 0.3f ? P_WARN : P_TEXT;
   row(c, "AGITATION", "%d %%", iround(S.in.antenna * 100));
   row(c, "UNIT", "ext.io 0x45");
+}
+
+static void actTheremin() { thereminStart(); mindSay("tilt it to sing. raise it to swell. twist it to tremble.", 7.0f, 2, false); }
+static void fTheremin(Card& c) {
+  char sc[16]; strncpy(sc, thereminScaleName(S.thereScale), sizeof(sc) - 1); sc[sizeof(sc) - 1] = 0;
+  for (char* q = sc; *q; q++) if (*q >= 'a' && *q <= 'z') *q = (char)(*q - 32);
+  strcpy(c.big, sc);
+  if (S.thereOct) snprintf(c.unit, sizeof(c.unit), "OCT %+d", S.thereOct);
+  strcpy(c.sub, "enter: it sings");
+  c.tone = P_ACC;
+  row(c, "PITCH", "tilt it");
+  row(c, "LOUDER", "raise it");
+  row(c, "TREMBLE", "twist it");
+  row(c, "SCALE", "%s", thereminScaleName(S.thereScale));
+  row(c, "HOLD", "enter or G0");
 }
 
 // ---- room
@@ -704,13 +721,14 @@ static void fTide(Card& c) {
 }
 
 // =============================================================== the layout
-struct Tool { const char* name; void (*fill)(Card&); void (*act)(); const char* actName; };
-struct Band { const char* name; const char* reach; const char* what; uint8_t n; Tool t[4]; };
+struct Tool { const char* name; void (*fill)(Card&); void (*act)(); const char* actName; bool direct; };   // direct: enter acts at once
+struct Band { const char* name; const char* reach; const char* what; uint8_t n; Tool t[5]; };
 static const Band BANDS[] = {
   {"SELF", "0 M", "ITS OWN BODY", 4, {{"POWER", fPower, nullptr, nullptr}, {"MEMORY", fMemory, nullptr, nullptr},
                                       {"LINK", fLink, actPortal, "OPEN WIFI SETUP"}, {"SYSTEM", fSystem, nullptr, nullptr}}},
-  {"HAND", "1 M", "HOW IT IS HELD", 4, {{"LEVEL", fLevel, nullptr, nullptr}, {"MOTION", fMotion, actPeaks, "RESET PEAKS"},
-                                        {"STEPS", fSteps, nullptr, nullptr}, {"WIRES", fWires, nullptr, nullptr}}},
+  {"HAND", "1 M", "HOW IT IS HELD", 5, {{"LEVEL", fLevel, nullptr, nullptr}, {"MOTION", fMotion, actPeaks, "RESET PEAKS"},
+                                        {"STEPS", fSteps, nullptr, nullptr}, {"WIRES", fWires, nullptr, nullptr},
+                                        {"THEREMIN", fTheremin, actTheremin, "PLAY IT", true}}},
   {"ROOM", "10 M", "THE ROOM AROUND IT", 4, {{"METER", fMeter, actMeter, "RESET PEAK"}, {"TUNER", fTuner, nullptr, nullptr},
                                              {"ECHO", fEcho, actEcho, "STRIKE THE ROOM"}, {"KNOCK", fKnock, actKnock, "RESET"}}},
   {"RF", "100 M", "THE RADIO AIR", 2, {{"ETHER", fEther, nullptr, nullptr}, {"KIN", fKin, nullptr, nullptr}}},
@@ -762,7 +780,11 @@ bool proKey(int c) {
     click(d); return true;
   }
   if (up || down) { S.proTool = (uint8_t)((S.proTool + b.n + (up ? -1 : 1)) % b.n); click(up ? -1 : 1); return true; }
-  if (c == K_ENTER) { S.proOpen = true; click(1); return true; }
+  if (c == K_ENTER) {
+    const Tool& t = b.t[S.proTool];
+    if (t.direct && t.act) t.act(); else S.proOpen = true;
+    click(1); return true;
+  }
   if (c == K_BACK) return true;                              // nothing to delete; don't fall through
   return false;                                              // escape: the mind takes it back to the shore
 }
@@ -869,7 +891,11 @@ static void drawDashboard() {
   char r[24]; snprintf(r, sizeof(r), "REACH %s", b.reach);
   textRight(W - 4, 29, r, P_DIM);
   const int y0 = 39, hAll = 121 - y0;
-  if (b.n == 4) {
+  if (b.n == 5) {
+    int w3 = (W - 8) / 3, w2 = (W - 6) / 2, h = (hAll - 2) / 2;
+    for (int i = 0; i < 3; i++) drawTile(b.t[i], 2 + i * (w3 + 2), y0, w3, h, i == S.proTool);
+    for (int i = 3; i < 5; i++) drawTile(b.t[i], 2 + (i - 3) * (w2 + 2), y0 + h + 2, w2, h, i == S.proTool);
+  } else if (b.n == 4) {
     int w = (W - 6) / 2, h = (hAll - 2) / 2;
     for (int i = 0; i < 4; i++) drawTile(b.t[i], 2 + (i & 1) * (w + 2), y0 + (i >> 1) * (h + 2), w, h, i == S.proTool);
   } else if (b.n == 3) {

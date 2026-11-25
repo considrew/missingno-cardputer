@@ -1,6 +1,7 @@
 #include "mn_draw.h"
 #include "mn_horizon.h"
 #include "mn_pro.h"
+#include "mn_theremin.h"
 #include <math.h>
 #include <string.h>
 #include <stdio.h>
@@ -855,6 +856,11 @@ static void drawChart() {
 
 // =============================================================== entry points
 void drawFrame() {
+  if (S.theremin) {
+    drawTheremin();
+    if (S.typed[0] || (S.say[0] && S.sayAge <= S.sayHold)) drawSpeech(S);
+    return;
+  }
   if (S.pro) { drawPro(); return; }
   switch (S.view) {
     case V_SPIRAL: drawSpiral(); break;

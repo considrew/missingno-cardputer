@@ -8,6 +8,7 @@
 #include "mn_lexicon.h"
 #include "mn_horizon.h"
 #include "mn_pro.h"
+#include "mn_theremin.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -435,14 +436,14 @@ static void tickBody(float dt) {
   S.face.shear = approach(S.face.shear, clampf(in.tilt * 0.25f, -9.0f, 9.0f), dt, 0.15f);
   S.spiralRot += in.spin * dt * 0.0087f;
   S.scene.starShift += in.spin * dt * 0.15f;
-  if (fabsf(in.spin) > 220.0f) M.spinHold += dt; else M.spinHold = maxf(0.0f, M.spinHold - dt * 2.0f);
+  if (fabsf(in.spin) > 220.0f && !S.theremin) M.spinHold += dt; else M.spinHold = maxf(0.0f, M.spinHold - dt * 2.0f);
   if (M.spinHold > 1.2f && S.t - M.spunSaid > 40.0f) { sayPool(L_SPUN, 6, 1); M.spunSaid = S.t; M.spinHold = 0; differ(0.05f); }
   if (in.freefall && !M.wasFreefall) {
     wake(); note(N_RUPTURE, 0, 1.0f); M.glitchPulse = 1.0f; M.shock += 0.35f;
     sayPool(L_FREEFALL, 5, 2); differ(0.15f); mark(2);
   }
   M.wasFreefall = in.freefall;
-  if (in.motion > 0.7f) M.shakeHold += dt; else M.shakeHold = maxf(0.0f, M.shakeHold - dt);
+  if (in.motion > 0.7f && !S.theremin) M.shakeHold += dt; else M.shakeHold = maxf(0.0f, M.shakeHold - dt);   // playing is not being shaken
   if (M.shakeHold > 0.5f) {
     M.scatterT = maxf(M.scatterT, 0.8f);
     if (S.t - M.shakenSaid > 25.0f) { sayPool(L_SHAKEN, 5, 1); M.shakenSaid = S.t; note(N_RUPTURE, 0, 0.6f); differ(0.05f); }
@@ -504,7 +505,7 @@ static void tickAffect(float dt) {
 
 static void tickSleep(float dt) {
   Senses& in = S.in;
-  bool calm = in.motion < 0.05f && in.loud < 0.12f && M.keyHeat <= 0.0f;
+  bool calm = in.motion < 0.05f && in.loud < 0.12f && M.keyHeat <= 0.0f && !S.theremin;
   M.still = calm ? M.still + dt : maxf(0.0f, M.still - dt * 6.0f);
   float target = (M.still > 240.0f || in.faceDown) ? 1.0f : 0.0f;
   S.sleep = approach(S.sleep, target, dt, target > 0.5f ? (in.faceDown ? 1.0f : 6.0f) : 0.5f);
@@ -524,7 +525,7 @@ static void tickMuse(float dt) {
   if (M.nextMuse > 0) return;
   M.nextMuse = R.range(38.0f, 115.0f);
   bool speaking = S.say[0] && S.sayAge < S.sayHold + 6.0f;
-  if (S.sleep > 0.3f || speaking || S.typed[0]) return;
+  if (S.sleep > 0.3f || speaking || S.typed[0] || S.theremin) return;
   int cand[20]; int n = 0;
   if (M.skyValid) {
     if (sky.sunEl > 6.0f) cand[n++] = L_DAY;
@@ -683,6 +684,10 @@ static void tickSound(float dt) {
   p.crackle = clampf(S.unease * 0.5f + (S.presence > 1 ? (S.presence - 1) * 0.12f : 0.0f) + (in.apCount >= 15 ? 0.1f : 0.0f) + (lowBattery() ? 0.3f : 0.0f), 0, 1);
   float hush = maxf(S.sleep * 0.8f, in.faceDown ? 1.0f : 0.0f);
   if (S.presence == 4 && S.placeKind == 11) hush = 1.0f;  // some places ask for silence
+  if (S.theremin) {                                       // it stands back and lets the hand sing
+    hush = in.faceDown ? 1.0f : 0.0f;
+    p.drone *= 0.3f; p.lead = 0; p.crackle *= 0.3f;
+  }
   p.hush = hush;
 }
 
@@ -709,6 +714,7 @@ void mindTick() {
   S.t += dt; S.frame++; S.hintAge += dt; S.sayAge += dt;
   for (Later& l : M.later) if (l.on && S.t >= l.at) { S.notes.push(l.n); l.on = false; }
   proTick(dt);                                     // before the census is consumed
+  thereminTick(dt);
   tickSky(dt); tickWeather(dt); tickPlace(dt); tickEther(); tickHearing(dt); tickBody(dt); tickKin();
   tickAffect(dt); tickSleep(dt); tickMuse(dt); tickFace(dt); tickRidge(dt); tickSpiral(dt); tickSound(dt); tickLight(dt);
   Life& L = life();
@@ -732,6 +738,7 @@ void mindSounding(const Sounding& s) {
 
 void mindButton(bool longPress) {
   wake(); S.hintAge = 99;
+  if (S.theremin && !longPress) { thereminButton(); return; }
   if (longPress) {
     S.muted = !S.muted; life().muted = S.muted ? 1 : 0; S.wantSave = true;
     mindSay(S.muted ? "muted." : "i can speak again.", 3.0f, 2, false);
@@ -771,12 +778,13 @@ static void command(char* line) {
   Life& L = life();
 
   if (!strcmp(w, "help") || !strcmp(w, "?")) {
-    static const char* const HELP[4] = {
+    static const char* const HELP[5] = {
       "type to it. enter alone strikes the room. tab turns the view.",
       "words it obeys: wifi. mute. vol 0-9. spiral. chart. ear. shore. pro.",
       "hum and hold. knock a rhythm. carry it. forget, twice, erases.",
-      "format, twice, erases a card it cannot read and makes it its own."};
-    mindSay(HELP[M.helpN % 4], 9.0f, 2, false); M.helpN++; return;
+      "format, twice, erases a card it cannot read and makes it its own.",
+      "theremin: tilt it to sing, raise it to swell, twist it to tremble."};
+    mindSay(HELP[M.helpN % 5], 9.0f, 2, false); M.helpN++; return;
   }
   if (!strcmp(w, "wifi")) { S.wantPortal = true; mindSay("opening a door.", 4.0f, 2, false); return; }
   if (!strcmp(w, "mute") || !strcmp(w, "hush")) { S.muted = true; L.muted = 1; S.wantSave = true; mindSay("muted.", 3.0f, 2, false); return; }
@@ -816,6 +824,13 @@ static void command(char* line) {
   if (!strcmp(w, "ear") || !strcmp(w, "sounding")) { setView(V_SOUNDING); return; }
   if (!strcmp(w, "shore") || !strcmp(w, "back")) { setView(V_SHORE); return; }
   if (!strcmp(w, "save")) { S.wantSave = true; mindSay("kept.", 3.0f, 2, false); return; }
+  // its voice, given to the hand
+  if (!strcmp(w, "theremin")) {
+    if (S.theremin) { thereminStop(); mindSay("it was only ever the air.", 4.0f, 2, false); return; }
+    thereminStart();
+    mindSay("tilt it to sing. raise it to swell. twist it to tremble.", 7.0f, 2, false);
+    return;
+  }
   // the instruments, laid out by reach; "pro tuner" goes straight to one
   if (!strcmp(w, "pro") || !strncmp(w, "pro ", 4)) {
     const char* which = w[3] ? w + 4 : "";
@@ -848,6 +863,7 @@ static void command(char* line) {
 
 void mindKey(int c) {
   wake(); S.hintAge = 99; M.keyHeat = 1.0f;
+  if (thereminKey(c)) return;                      // the theremin's octave, scale and hold
   if (proKey(c)) return;                           // the dashboard's arrows, enter and escape
   int len = (int)strlen(S.typed);
   if (c == K_ENTER) {
@@ -861,6 +877,7 @@ void mindKey(int c) {
   if (c == K_BACK) { if (len > 0) { S.typed[len - 1] = 0; note(N_PLUCK, deg(-3), 0.35f); } return; }
   if (c == K_ESC) {
     if (len > 0) S.typed[0] = 0;
+    else if (S.theremin) { thereminStop(); note(N_BELL, deg(0), 0.4f); }
     else if (S.pro) { S.pro = false; S.proOpen = false; note(N_BELL, deg(0), 0.4f); }
     else if (S.view != V_SHORE) setView(V_SHORE); else S.sayAge = 99;
     return;
