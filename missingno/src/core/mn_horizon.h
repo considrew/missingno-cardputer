@@ -28,11 +28,12 @@ struct Horizon {
   bool open = false;              // a horizon file was found and made sense
   bool here = false;              // and where it stands is on it
   uint8_t bands = 0;
-  uint8_t sources = 0;            // 1 USGS 3DEP, 2 Copernicus GLO-30
+  uint8_t sources = 0;            // bits: 1 USGS 3DEP, 2 Copernicus GLO-30, 4 GLO-90 fetched by the device itself
   uint16_t bandKm[HZ_BANDS] = {0};
   uint32_t points = 0;
   float stepKm = 0;
   int32_t index = -1;             // which point is loaded
+  uint32_t gen = 0;               // counts the horizons opened, so a new one is noticed
   float offKm = 0;                // how far that point is from here
   int16_t groundM = 0;
   float peakAz = 0, peakAng = 0, peakKm = 0;   // the highest point beyond the near ground

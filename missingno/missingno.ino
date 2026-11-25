@@ -27,6 +27,7 @@
 #include <WiFi.h>
 #include <WebServer.h>
 #include <HTTPClient.h>
+#include <WiFiClientSecure.h>
 #include <Preferences.h>
 #include <SPI.h>
 #include <SD.h>
@@ -97,16 +98,26 @@ static constexpr int WIFI_SLOT_COUNT = 5;
 static const char* SETUP_AP_SSID = "missingno";
 
 // ------------------------------------------------------------ shared structures
+static constexpr int LOC_APS = 12;
 struct NetJob {
-  volatile bool wantWx = false, wantGeo = false;
+  volatile bool wantWx = false, wantGeo = false, wantLocate = false, wantHz = false;
   double lat = 0, lon = 0;
   char city[84] = {0};
+  uint8_t apMac[LOC_APS][6]; int8_t apRssi[LOC_APS]; int apN = 0;   // for finding itself by the air
+  double hzLat = 0, hzLon = 0;
 };
+// The land around it, fetched by the device itself (sources bit 4): one MNHZ point.
+static constexpr int HZB = 3;
+static constexpr int HZ_REC = 12 + HZB * 360;
+static constexpr int HZ_FILE = 64 + HZ_REC;
 struct NetResult {
   volatile bool wxFresh = false, geoDone = false, geoOk = false;
   int wmo = -1; float cloud = 0.3f, tempC = 12, humid = 60, press = 1013, trend = 0, windKmh = 0, windDir = 0, visKm = 20;
   bool haveTz = false; int32_t utcOffset = 0;            // the local clock there, by the weather service's reckoning
   double geoLat = 0, geoLon = 0;
+  volatile bool locDone = false, locOk = false; double locLat = 0, locLon = 0; float locAccKm = 0; uint8_t locSrc = 0;
+  volatile bool hzDone = false, hzOk = false; volatile float hzProg = -1;
+  uint8_t hz[HZ_FILE];                                     // a whole horizon file, ready to keep
 };
 struct KinSeen { uint32_t id; uint32_t ms; float rootHz; char scrap[40]; bool scrapNew; };
 struct KinPacket { uint32_t magic; uint32_t id; float rootHz; uint8_t unease, arousal, seq, pad; char scrap[40]; };
@@ -144,6 +155,9 @@ static volatile bool hushed = false;
 static bool portalOpen = false; static String portalStatus = "waiting";
 static String pendSsid, pendPass, pendCity; static uint8_t pendStage = 0; static uint32_t pendMs = 0;
 static bool haveNamed = false; static double namedLat = 0, namedLon = 0;
+static bool namedFresh = false;                            // a town given at the wifi door this wake outranks the air
+static bool haveNetLoc = false; static double netLat = 0, netLon = 0; static uint8_t netLocSrc = 0; static float netLocAcc = 0;
+static uint8_t airMac[LOC_APS][6]; static int8_t airRssi[LOC_APS]; static int airN = 0;   // the last census, for locating
 
 // GPS
 static const int GPS_RX_ALL[4] = {13, 15, PIN_GROVE_SCL, PIN_GROVE_SDA};
@@ -539,15 +553,76 @@ static bool hzReadBlob(uint32_t off, void* dst, uint32_t n) {
   return true;
 }
 #endif
+static bool hzHaveMap = false;                             // a pre-rendered map (card or built in) exists
+static bool hzPt = false; static double hzPtLat = 0, hzPtLon = 0;   // or a point it fetched itself is open
 static void horizonBegin() {
+  hzPt = false;
+  if (hzFile) hzFile.close();
   if (storeFs && storeFs->exists("/missingno/horizon.bin")) {
     hzFile = storeFs->open("/missingno/horizon.bin", FILE_READ);
-    if (hzFile && mn::horizonOpen(hzReadFile, hzFile.size())) { hzFrom = storeName; return; }
+    if (hzFile && mn::horizonOpen(hzReadFile, hzFile.size())) { hzFrom = storeName; hzHaveMap = true; return; }
     if (hzFile) hzFile.close();
   }
 #ifdef MN_HAVE_HORIZON
-  if (mn::horizonOpen(hzReadBlob, sizeof(MN_HORIZON_BLOB))) hzFrom = "built in";
+  if (mn::horizonOpen(hzReadBlob, sizeof(MN_HORIZON_BLOB))) { hzFrom = "built in"; hzHaveMap = true; }
 #endif
+}
+
+// Wherever it is taken: the land it fetched for itself, one point per place,
+// kept on the card as /missingno/hz/<lat>_<lon>.bin (thousandths of a degree).
+static uint8_t hzRam[HZ_FILE];
+static bool hzRamRead(uint32_t off, void* dst, uint32_t n) {
+  if ((uint64_t)off + n > HZ_FILE) return false;
+  memcpy(dst, hzRam + off, n);
+  return true;
+}
+static float kmBetween(double a1, double o1, double a2, double o2) {
+  double dLat = a2 - a1, dLon = (o2 - o1) * cos(a1 * 0.0174533);
+  return (float)(sqrt(dLat * dLat + dLon * dLon) * 111.195);
+}
+static bool hzOpenRam(double la, double lo) {
+  if (hzFile) hzFile.close();
+  hzPt = false;
+  if (!mn::horizonOpen(hzRamRead, HZ_FILE)) return false;
+  hzPt = true; hzPtLat = la; hzPtLon = lo; hzFrom = "fetched";
+  return true;
+}
+// The nearest kept point within 8 km, opened; false if there is none.
+static bool hzOpenKept(double lat, double lon) {
+  if (!storeFs) return false;
+  File dir = storeFs->open("/missingno/hz");
+  if (!dir || !dir.isDirectory()) return false;
+  char best[48] = {0}; float bestKm = 8.0f; double bLa = 0, bLo = 0;
+  for (File f = dir.openNextFile(); f; f = dir.openNextFile()) {
+    const char* nm = f.name(); const char* sl = strrchr(nm, '/'); if (sl) nm = sl + 1;
+    long a = 0, o = 0;
+    if (f.size() == HZ_FILE && sscanf(nm, "%ld_%ld.bin", &a, &o) == 2) {
+      float km = kmBetween(lat, lon, a / 1000.0, o / 1000.0);
+      if (km < bestKm) { bestKm = km; snprintf(best, sizeof(best), "/missingno/hz/%s", nm); bLa = a / 1000.0; bLo = o / 1000.0; }
+    }
+    f.close();
+  }
+  dir.close();
+  if (!best[0]) return false;
+  File f = storeFs->open(best, FILE_READ);
+  bool ok = f && f.read(hzRam, HZ_FILE) == HZ_FILE;
+  if (f) f.close();
+  return ok && hzOpenRam(bLa, bLo);
+}
+static void hzKeep(double la, double lo) {
+  if (!storeFs) return;
+  storeFs->mkdir("/missingno");
+  storeFs->mkdir("/missingno/hz");
+  char path[48]; snprintf(path, sizeof(path), "/missingno/hz/%ld_%ld.bin", lround(la * 1000), lround(lo * 1000));
+  File f = storeFs->open(path, FILE_WRITE);
+  if (f) { f.write(hzRam, HZ_FILE); f.close(); }
+}
+// Is the land here already known? Opens the best horizon for (lat, lon) if one is.
+static bool hzCover(double lat, double lon) {
+  if (hzPt && kmBetween(lat, lon, hzPtLat, hzPtLon) < 8.0f) return true;
+  if (!hzPt && mn::HZ.open && hzHaveMap) { mn::horizonAt(true, lat, lon); if (mn::HZ.here) return true; }
+  if (hzPt && hzHaveMap) { horizonBegin(); mn::horizonAt(true, lat, lon); if (mn::HZ.here) return true; }
+  return hzOpenKept(lat, lon);
 }
 
 static void journal(const char* what) {
@@ -804,7 +879,8 @@ static String htmlEscape(const String& src) {
 
 // --------------------------------------------- the net task: slow things, apart
 // Weather comes from Open-Meteo over plain HTTP. The position sent is rounded
-// to two decimals (about a kilometre); nothing else leaves the device.
+// to two decimals (about a kilometre). (Finding itself and the land around it,
+// below, are the only other things that reach out.)
 static bool fetchWeather(double lat, double lon) {
   HTTPClient http;
   String url = String("http://api.open-meteo.com/v1/forecast?latitude=") + String(lat, 2) + "&longitude=" + String(lon, 2)
@@ -852,6 +928,168 @@ static bool fetchCity(const char* city, double& lat, double& lon) {
   return jsonNumber(body, "latitude", lat, rp, re) && jsonNumber(body, "longitude", lon, rp, re);
 }
 
+// Where it is, when there is no sky fix: first by the access points around it
+// (beaconDB, an open Wi-Fi location database: their addresses go there, nothing
+// else), then, failing that, roughly by the network address (ip-api.com).
+static bool fetchLocateAir(double& lat, double& lon, float& accKm) {
+  if (netJob.apN < 2) return false;
+  String body = "{\"considerIp\":false,\"wifiAccessPoints\":[";
+  for (int i = 0; i < netJob.apN; i++) {
+    char m[80]; const uint8_t* b = netJob.apMac[i];
+    snprintf(m, sizeof(m), "%s{\"macAddress\":\"%02x:%02x:%02x:%02x:%02x:%02x\",\"signalStrength\":%d}",
+             i ? "," : "", b[0], b[1], b[2], b[3], b[4], b[5], netJob.apRssi[i]);
+    body += m;
+  }
+  body += "]}";
+  WiFiClientSecure tls; tls.setInsecure();
+  HTTPClient http;
+  http.setConnectTimeout(10000); http.setTimeout(10000);
+  if (!http.begin(tls, "https://api.beacondb.net/v1/geolocate")) return false;
+  http.setUserAgent("missingno-cardputer/1");
+  http.addHeader("Content-Type", "application/json");
+  int code = http.POST(body);
+  String r = code == HTTP_CODE_OK ? http.getString() : String();
+  http.end();
+  double acc = 0;
+  if (code != HTTP_CODE_OK || !jsonNumber(r, "lat", lat) || !jsonNumber(r, "lng", lon)) return false;
+  accKm = jsonNumber(r, "accuracy", acc) ? (float)(acc / 1000.0) : 1.0f;
+  return accKm < 25.0f;
+}
+static bool fetchLocateIp(double& lat, double& lon) {
+  HTTPClient http;
+  http.setConnectTimeout(8000); http.setTimeout(8000);
+  if (!http.begin("http://ip-api.com/json/?fields=status,lat,lon")) return false;
+  int code = http.GET();
+  String r = code == HTTP_CODE_OK ? http.getString() : String();
+  http.end();
+  return code == HTTP_CODE_OK && r.indexOf("success") >= 0 && jsonNumber(r, "lat", lat) && jsonNumber(r, "lon", lon);
+}
+
+// The shape of the land, learned on the spot: 360 rays out to 200 km, 32 samples
+// each, then 6 more around the highest point of each ray in the middle and far
+// bands (summits fall between samples). Heights from OpenTopoData's public API
+// (its "mapzen" set: SRTM, 3DEP and others, worldwide): 100 points to a request,
+// one request a second, a thousand a day, so about 160 requests, three minutes,
+// for each new place. Each degree keeps the highest angle in each band, as
+// tools/horizon.py does.
+static constexpr int HZ_DN = 32, HZ_REF = 6;
+static constexpr float HZ_EDGE_KM[HZB] = {4, 25, 200};
+static WiFiClientSecure* hzTls = nullptr;
+static uint32_t hzLastReqMs = 0;
+static bool elevBatch(const double* la, const double* lo, int n, double* out) {
+  String url; url.reserve(2000);
+  url = "https://api.opentopodata.org/v1/mapzen?locations=";
+  for (int i = 0; i < n; i++) { if (i) url += '|'; url += String(la[i], 4); url += ','; url += String(lo[i], 4); }
+  if (!hzTls) { hzTls = new WiFiClientSecure(); hzTls->setInsecure(); }
+  for (int tries = 0; tries < 4; tries++) {
+    if (WiFi.status() != WL_CONNECTED) return false;
+    int32_t wait = 1100 - (int32_t)(millis() - hzLastReqMs);
+    if (wait > 0) vTaskDelay(pdMS_TO_TICKS(wait));
+    hzLastReqMs = millis();
+    HTTPClient http;
+    http.setReuse(true);
+    http.setConnectTimeout(10000); http.setTimeout(15000);
+    if (!http.begin(*hzTls, url)) return false;
+    http.setUserAgent("missingno-cardputer/1");
+    int code = http.GET();
+    String r = code == HTTP_CODE_OK ? http.getString() : String();
+    http.end();
+    if (code == HTTP_CODE_OK) {
+      int got = 0, p = 0;
+      while (got < n && (p = r.indexOf("\"elevation\":", p)) >= 0) {
+        p += 12; while (p < (int)r.length() && r[p] == ' ') p++;
+        if (r.startsWith("null", p)) { out[got++] = -10000; continue; }
+        char* e = nullptr; double v = strtod(r.c_str() + p, &e);
+        if (!e || e == r.c_str() + p) break;
+        out[got++] = v; p = e - r.c_str();
+      }
+      if (got == n) return true;
+    }
+    hzTls->stop();
+    vTaskDelay(pdMS_TO_TICKS(code == 429 ? 20000 : 2000 * (tries + 1)));
+  }
+  return false;
+}
+static float hzAng[HZB][360];
+static uint8_t hzBest[HZB][360];             // which coarse sample held each ray's highest point
+static struct { double la[100], lo[100], z[100]; uint16_t a[100]; float d[100]; int8_t di[100]; int n; } hzQ;
+static float hzPeakA, hzPeakAz, hzPeakKm, hzNearA, hzNearAz, hzNearKm, hzEye;
+static double hzLat0, hzLon0;
+static bool hzFlush() {
+  if (!hzQ.n) return true;
+  if (!elevBatch(hzQ.la, hzQ.lo, hzQ.n, hzQ.z)) return false;
+  for (int k = 0; k < hzQ.n; k++) {
+    int a = hzQ.a[k]; float d = hzQ.d[k], drop = d * d / (2.0f * 6371008.8f) * 0.87f;
+    float ang = atan2f((float)hzQ.z[k] - drop - hzEye, d) * RAD_TO_DEG;
+    int b = d < HZ_EDGE_KM[0] * 1000 ? 0 : (d < HZ_EDGE_KM[1] * 1000 ? 1 : 2);
+    if (ang > hzAng[b][a]) { hzAng[b][a] = ang; if (hzQ.di[k] >= 0) hzBest[b][a] = hzQ.di[k]; }
+    if (d >= HZ_EDGE_KM[0] * 1000 && ang > hzPeakA) { hzPeakA = ang; hzPeakAz = a + 0.5f; hzPeakKm = d / 1000; }
+    if (d >= 1000 && ang > hzNearA) { hzNearA = ang; hzNearAz = a + 0.5f; hzNearKm = d / 1000; }
+  }
+  hzQ.n = 0;
+  return true;
+}
+static bool hzAdd(int a, float d, int di) {
+  const double p1 = hzLat0 * DEG_TO_RAD, l1 = hzLon0 * DEG_TO_RAD, R = 6371008.8;
+  double th = (a + 0.5) * DEG_TO_RAD, dl = d / R;
+  double sp2 = sin(p1) * cos(dl) + cos(p1) * sin(dl) * cos(th);
+  double p2 = asin(sp2);
+  double l2 = l1 + atan2(sin(th) * sin(dl) * cos(p1), cos(dl) - sin(p1) * sp2);
+  int k = hzQ.n++;
+  hzQ.la[k] = p2 * RAD_TO_DEG; hzQ.lo[k] = fmod(l2 * RAD_TO_DEG + 540.0, 360.0) - 180.0;
+  hzQ.a[k] = a; hzQ.d[k] = d; hzQ.di[k] = di;
+  return hzQ.n < 100 || hzFlush();
+}
+static bool fetchHorizon(double lat0, double lon0) {
+  static float dist[HZ_DN];
+  for (int i = 0; i < HZ_DN; i++) dist[i] = 250.0f * powf(800.0f, i / (float)(HZ_DN - 1));   // metres, 250 m .. 200 km
+  hzLat0 = lat0; hzLon0 = lon0; hzQ.n = 0;
+  hzQ.la[0] = lat0; hzQ.lo[0] = lon0;
+  if (!elevBatch(hzQ.la, hzQ.lo, 1, hzQ.z)) return false;
+  const float ground = hzQ.z[0] > -500 ? (float)hzQ.z[0] : 0.0f;
+  hzEye = (ground > 0 ? ground : 0) + 1.6f;
+  for (int b = 0; b < HZB; b++) for (int a = 0; a < 360; a++) { hzAng[b][a] = -90.0f; hzBest[b][a] = 0; }
+  hzPeakA = hzNearA = -90; hzPeakAz = hzPeakKm = hzNearAz = hzNearKm = 0;
+  const int coarse = 360 * HZ_DN, fine = 360 * 2 * HZ_REF, total = coarse + fine;
+  for (int p = 0; p < coarse; p++) {
+    if (!hzAdd(p / HZ_DN, dist[p % HZ_DN], p % HZ_DN)) return false;
+    if (hzQ.n == 0) netRes.hzProg = (float)(p + 1) / total;
+  }
+  if (!hzFlush()) return false;
+  for (int a = 0, done = 0; a < 360; a++) for (int b = 1; b < HZB; b++) {
+    int di = hzBest[b][a];
+    float lo = di > 0 ? dist[di - 1] : dist[di] * 0.8f, hi = di < HZ_DN - 1 ? dist[di + 1] : dist[di];
+    for (int k = 0; k < HZ_REF; k++, done++) {
+      float d = lo + (hi - lo) * (k + 0.5f) / HZ_REF;
+      int bb = d < HZ_EDGE_KM[0] * 1000 ? 0 : (d < HZ_EDGE_KM[1] * 1000 ? 1 : 2);
+      if (bb != b) continue;
+      if (!hzAdd(a, d, -1)) return false;
+      if (hzQ.n == 0) netRes.hzProg = (float)(coarse + done) / total;
+    }
+  }
+  if (!hzFlush()) return false;
+  if (hzTls) hzTls->stop();
+  float peakA = hzPeakA, peakAz = hzPeakAz, peakKm = hzPeakKm;
+  if (peakA <= 0) { peakA = hzNearA; peakAz = hzNearAz; peakKm = hzNearKm; }
+  // the file, as tools/horizon.py would write it for a single point
+  uint8_t* f = netRes.hz; memset(f, 0, HZ_FILE);
+  auto p16 = [](uint8_t* q, int v) { q[0] = v & 255; q[1] = (v >> 8) & 255; };
+  auto p32 = [](uint8_t* q, int32_t v) { for (int i = 0; i < 4; i++) q[i] = (v >> (8 * i)) & 255; };
+  memcpy(f, "MNHZ", 4); f[4] = 1; f[5] = HZB; p16(f + 6, 360);
+  p32(f + 8, (int32_t)lround(lat0 * 1e6)); p32(f + 12, (int32_t)lround(lon0 * 1e6)); p32(f + 16, 0); p32(f + 20, 0);
+  p16(f + 24, 1); p16(f + 26, 1); p16(f + 28, HZ_REC);
+  for (int b = 0; b < HZB; b++) p16(f + 30 + 2 * b, (int)HZ_EDGE_KM[b]);
+  f[38] = 4; f[39] = 16; p32(f + 40, (int32_t)time(nullptr));
+  uint8_t* r = f + 64;
+  p16(r, (int)lroundf(ground)); r[2] = 1;
+  p16(r + 4, (int)lroundf(peakAz * 10) % 3600); p16(r + 6, (int)lroundf(peakA * 100)); p16(r + 8, (int)lroundf(peakKm * 10));
+  for (int b = 0; b < HZB; b++) for (int a = 0; a < 360; a++) {
+    float g = hzAng[b][a];
+    r[12 + b * 360 + a] = g <= 0 ? 0 : (uint8_t)lroundf(255.0f * sqrtf((g > 90 ? 90 : g) / 90.0f));
+  }
+  return true;
+}
+
 static void netTask(void*) {
   for (;;) {
     if (WiFi.status() == WL_CONNECTED) {
@@ -864,6 +1102,20 @@ static void netTask(void*) {
       if (netJob.wantWx) {
         if (fetchWeather(netJob.lat, netJob.lon)) netRes.wxFresh = true;
         netJob.wantWx = false;
+      }
+      if (netJob.wantLocate) {
+        double la = 0, lo = 0; float acc = 0;
+        if (fetchLocateAir(la, lo, acc)) { netRes.locSrc = 2; netRes.locOk = true; }
+        else if (fetchLocateIp(la, lo)) { netRes.locSrc = 3; acc = 50; netRes.locOk = true; }
+        else netRes.locOk = false;
+        netRes.locLat = la; netRes.locLon = lo; netRes.locAccKm = acc;
+        netJob.wantLocate = false; netRes.locDone = true;
+      }
+      if (netJob.wantHz && !netJob.wantWx && !netJob.wantLocate) {
+        netRes.hzProg = 0;
+        netRes.hzOk = fetchHorizon(netJob.hzLat, netJob.hzLon);
+        netRes.hzProg = -1;
+        netJob.wantHz = false; netRes.hzDone = true;
       }
     }
     vTaskDelay(pdMS_TO_TICKS(250));
@@ -1018,7 +1270,7 @@ static void servicePending() {
   } else if (pendStage == 3) {
     if (netRes.geoDone || now - pendMs > 20000) {
       if (netRes.geoDone && netRes.geoOk) {
-        namedLat = netRes.geoLat; namedLon = netRes.geoLon; haveNamed = true;
+        namedLat = netRes.geoLat; namedLon = netRes.geoLon; haveNamed = true; namedFresh = true;
         prefs.putDouble("loclat", namedLat); prefs.putDouble("loclon", namedLon); prefs.putBool("haveloc", true);
         mn::mindSay("a way out is open. i know the town.", 6.0f, 2, false);
       } else mn::mindSay("a way out is open. the town is unknown to me.", 6.0f, 2, false);
@@ -1053,10 +1305,21 @@ static void serviceEther(mn::Senses& in) {
   // Keep only hashes of the strongest voices: enough to know a place again, not enough to name it.
   uint32_t hashes[8]; int rssi[8]; int cnt = 0, best = -100;
   String joinSsid, joinPass;
+  // For finding itself (and only sent when it does): the strongest access points that
+  // stay put. Phones and their hotspots use made-up addresses (the 0x02 bit), and the
+  // network it is joined to may be one of them travelling along; both are left out.
+  airN = 0;
+  uint8_t joined[6] = {0}; bool isJoined = WiFi.status() == WL_CONNECTED;
+  if (isJoined) { const uint8_t* jb = WiFi.BSSID(); if (jb) memcpy(joined, jb, 6); else isJoined = false; }
   for (int i = 0; i < n; i++) {
     int r = WiFi.RSSI(i);
     if (r > best) best = r;
     const uint8_t* bs = WiFi.BSSID(i);
+    if (bs && !(bs[0] & 0x02) && !(isJoined && memcmp(bs, joined, 6) == 0) && WiFi.SSID(i).indexOf("_nomap") < 0) {
+      int at = airN < LOC_APS ? airN++ : -1;
+      if (at < 0) { int weakest = 0; for (int k = 1; k < LOC_APS; k++) if (airRssi[k] < airRssi[weakest]) weakest = k; if (r > airRssi[weakest]) at = weakest; }
+      if (at >= 0) { memcpy(airMac[at], bs, 6); airRssi[at] = (int8_t)r; }
+    }
     if (bs && r > -88) {
       uint32_t h = mn::hash32(((uint32_t)bs[0] << 24 | (uint32_t)bs[1] << 16 | (uint32_t)bs[2] << 8 | bs[3]) ^ mn::hash32((uint32_t)bs[4] << 8 | bs[5]));
       int at = cnt < 8 ? cnt++ : -1;
@@ -1174,11 +1437,13 @@ static void serviceGps(mn::Senses& in) {
   bool fix = gpsLocked && nmea.g.fix && gpsLastFixMs && now - gpsLastFixMs < 10000;
   in.gpsFix = fix;
   if (fix) {
-    in.haveFix = true; in.lat = nmea.g.lat; in.lon = nmea.g.lon;
+    in.haveFix = true; in.lat = nmea.g.lat; in.lon = nmea.g.lon; in.locSrc = 1;
     in.altM = nmea.g.altM; in.speedKmh = nmea.g.speedKmh; in.sats = nmea.g.sats;
+  } else if (haveNetLoc && !namedFresh) {
+    in.haveFix = true; in.lat = netLat; in.lon = netLon; in.locSrc = netLocSrc; in.locAccKm = netLocAcc; in.speedKmh = 0; in.sats = 0;
   } else if (haveNamed) {
-    in.haveFix = true; in.lat = namedLat; in.lon = namedLon; in.speedKmh = 0; in.sats = 0;
-  } else in.haveFix = false;
+    in.haveFix = true; in.lat = namedLat; in.lon = namedLon; in.locSrc = 4; in.speedKmh = 0; in.sats = 0;
+  } else { in.haveFix = false; in.locSrc = 0; }
 
   // With no network clock, the satellites keep the time.
   if (gpsLocked && nmea.g.haveTime && (gpsClockSetMs == 0 || now - gpsClockSetMs > 3600000UL)) {
@@ -1288,6 +1553,53 @@ static void serviceWeather(mn::Senses& in) {
   }
 }
 
+// Finding itself over the air, then the land around it.
+static void serviceWhere(mn::Senses& in) {
+  static uint32_t lastLocateMs = 0, lastHzTryMs = 0, lastCheckMs = 0;
+  static double checkLat = 999, checkLon = 0, tryLat = 999, tryLon = 0;
+  static bool covered = false;
+  uint32_t now = millis();
+  bool online = wifiStage == WS_ONLINE && WiFi.status() == WL_CONNECTED;
+  if (netRes.locDone) {
+    netRes.locDone = false;
+    if (netRes.locOk) {
+      bool first = !haveNetLoc;
+      haveNetLoc = true; netLat = netRes.locLat; netLon = netRes.locLon; netLocSrc = netRes.locSrc; netLocAcc = netRes.locAccKm;
+      Serial.printf("where: by %s, within %.1f km\n", netLocSrc == 2 ? "wifi" : "ip", netLocAcc);
+      if (first && !in.gpsFix) mn::mindSay(netLocSrc == 2 ? "the air around me says where i am." : "the network says roughly where i am.", 5.0f, 1, false);
+    }
+  }
+  if (online && !in.gpsFix && !namedFresh && !netJob.wantLocate && lastCensusMs && !censusRunning &&
+      (lastLocateMs == 0 || now - lastLocateMs > 10UL * 60UL * 1000UL)) {
+    lastLocateMs = now;
+    int n = airN < LOC_APS ? airN : LOC_APS;
+    for (int i = 0; i < n; i++) { memcpy(netJob.apMac[i], airMac[i], 6); netJob.apRssi[i] = airRssi[i]; }
+    netJob.apN = n; netRes.locDone = false; netJob.wantLocate = true;
+  }
+  in.hzFetch = netRes.hzProg;
+  if (netRes.hzDone) {
+    netRes.hzDone = false;
+    if (netRes.hzOk) {
+      memcpy(hzRam, netRes.hz, HZ_FILE);
+      if (hzOpenRam(netJob.hzLat, netJob.hzLon)) { hzKeep(netJob.hzLat, netJob.hzLon); covered = true; }
+      Serial.printf("horizon: fetched, peak %.1f deg\n", mn::HZ.peakAng);
+    } else Serial.println("horizon: fetch failed");
+    checkLat = 999;                                            // look again
+  }
+  if (!in.haveFix || netJob.wantHz) return;
+  if (checkLat == 999 || kmBetween(in.lat, in.lon, checkLat, checkLon) > 1.0f || (!covered && now - lastCheckMs > 60000)) {
+    checkLat = in.lat; checkLon = in.lon; lastCheckMs = now;
+    covered = hzCover(in.lat, in.lon);
+  }
+  if (covered || !online) return;
+  bool moved = tryLat == 999 || kmBetween(in.lat, in.lon, tryLat, tryLon) > 8.0f;
+  if (lastHzTryMs && now - lastHzTryMs < (moved ? 5UL : 10UL) * 60UL * 1000UL) return;
+  lastHzTryMs = now; tryLat = in.lat; tryLon = in.lon;
+  netJob.hzLat = round(in.lat * 1000) / 1000; netJob.hzLon = round(in.lon * 1000) / 1000;
+  netRes.hzDone = false; netRes.hzProg = 0; netJob.wantHz = true;
+  mn::mindSay("i am feeling for the shape of the land.", 5.0f, 1, false);
+}
+
 static void pushFrame() {
   M5Cardputer.Display.pushImage(0, 0, mn::W, mn::H, mn::fb);
 }
@@ -1362,7 +1674,7 @@ void setup() {
   WiFi.setAutoReconnect(true);
   esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE);
   initKin();
-  xTaskCreatePinnedToCore(netTask, "net", 8192, nullptr, 1, nullptr, 0);
+  xTaskCreatePinnedToCore(netTask, "net", 12288, nullptr, 1, nullptr, 0);
 
   initGrove();
   gpsCombos = groveIsI2C ? 4 : 8;                            // Grove pins only if nothing I2C lives there
@@ -1410,6 +1722,7 @@ void loop() {
   servicePending();
   serviceKin(in);
   serviceWeather(in);
+  serviceWhere(in);
   serviceAntenna(in);
   serviceBattery(in);
   serviceSelf(in);

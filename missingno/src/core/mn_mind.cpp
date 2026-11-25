@@ -47,7 +47,7 @@ static struct Mind {
   // ridge / spiral
   uint8_t markNext, pendEv; float ridgeH;
   // the land that is really there
-  bool hzSaid; int sunBehind;
+  bool hzSaid; int sunBehind; uint32_t hzGen;
   // commands
   float forgetArmed, formatArmed; uint32_t stepsAtBoot; int lines;
   Later later[12];
@@ -153,6 +153,7 @@ static float lerpAngle(float a, float b, float k) {
 static const char* const DIRN[8] = {"north", "north-east", "east", "south-east", "south", "south-west", "west", "north-west"};
 static void tickLand() {
   if (!HZ.here) { M.sunBehind = 0; return; }
+  if (HZ.gen != M.hzGen) { if (M.hzGen) M.hzSaid = false; M.hzGen = HZ.gen; }   // a new place: tell it again
   if (!M.hzSaid && S.t > 14.0f && S.sleep < 0.5f) {
     char b[84];
     if (HZ.peakAng >= 0.35f)

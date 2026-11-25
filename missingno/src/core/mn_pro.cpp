@@ -619,19 +619,25 @@ static void fWeather(Card& c) {
 static void fPos(Card& c) {
   double lat, lon;
   if (!where(lat, lon)) { none(c, "no gps, no town"); return; }
-  const char* src = S.in.gpsFix ? "gps" : (S.in.haveFix ? "named town" : "last known");
+  static const char* const SRC[5] = {"last known", "gps", "wifi", "network (rough)", "named town"};
+  const char* src = S.in.haveFix ? SRC[S.in.locSrc < 5 ? S.in.locSrc : 0] : SRC[0];
   snprintf(c.big, sizeof(c.big), "%.4f", lat);
   snprintf(c.sub, sizeof(c.sub), "lon %.4f", lon);
   c.tone = S.in.gpsFix ? P_OK : P_TEXT;
   row(c, "LAT", "%.5f", lat);
   row(c, "LON", "%.5f", lon);
   row(c, "FROM", "%s", src);
+  if (S.in.haveFix && (S.in.locSrc == 2 || S.in.locSrc == 3)) row(c, "WITHIN", "%.1f km", S.in.locAccKm);
   if (S.in.gpsFix) { row(c, "ALTITUDE", "%d m", iround(S.in.altM)); row(c, "SPEED", "%.1f km/h", S.in.speedKmh); }
   else if (HZ.here) row(c, "GROUND", "%d m (map)", HZ.groundM);
 }
 static void fHorizon(Card& c) {
   c.gfx = gHorizon;
-  if (!HZ.open) { strcpy(c.big, "NO MAP"); c.live = false; strcpy(c.sub, "tools/horizon.py"); row(c, "MAP", "none"); return; }
+  if (S.in.hzFetch >= 0 && !HZ.here) {
+    snprintf(c.big, sizeof(c.big), "%d", iround(S.in.hzFetch * 100)); strcpy(c.unit, "%"); strcpy(c.sub, "learning the land");
+    row(c, "FETCHING", "elevation, 200 km"); return;
+  }
+  if (!HZ.open) { strcpy(c.big, "NO MAP"); c.live = false; strcpy(c.sub, S.in.online ? "needs a position" : "needs wifi"); row(c, "MAP", "none"); return; }
   if (!HZ.here) { strcpy(c.big, "OFF MAP"); c.live = false; strcpy(c.sub, "beyond its map"); row(c, "POINTS", "%lu", (unsigned long)HZ.points); return; }
   snprintf(c.big, sizeof(c.big), "%.1f", HZ.peakAng); strcpy(c.unit, "DEG");
   snprintf(c.sub, sizeof(c.sub), "%s, %d km off", dir16(HZ.peakAz), iround(HZ.peakKm));
@@ -640,7 +646,7 @@ static void fHorizon(Card& c) {
   row(c, "AWAY", "%.1f km", HZ.peakKm);
   row(c, "GROUND", "%d m", HZ.groundM);
   row(c, "POINT", "%.1f km off", HZ.offKm);
-  row(c, "FROM", "%s", HZ.sources == 1 ? "usgs 3dep" : (HZ.sources == 2 ? "copernicus" : "3dep+glo30"));
+  row(c, "FROM", "%s", HZ.sources == 4 ? "glo-90 (fetched)" : HZ.sources == 1 ? "usgs 3dep" : (HZ.sources == 2 ? "copernicus" : "3dep+glo30"));
 }
 static void fDrift(Card& c) {
   snprintf(c.big, sizeof(c.big), "%lu", (unsigned long)S.cellsKnown); strcpy(c.unit, "CELLS");

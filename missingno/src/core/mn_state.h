@@ -39,6 +39,9 @@ struct Senses {
   double utc = 0;               // unix seconds
   bool   haveFix = false;       // any position at all (GPS, or the named city)
   bool   gpsFix = false;        // a live sky fix
+  uint8_t locSrc = 0;           // where the position came from: 0 none, 1 gps, 2 wifi, 3 ip, 4 the named town
+  float  locAccKm = 0;          // how sure, for wifi and ip
+  float  hzFetch = -1;          // learning the land over the network: 0..1, -1 when not
   double lat = 0, lon = 0;
   float  altM = 0, speedKmh = 0;
   int    sats = 0;
