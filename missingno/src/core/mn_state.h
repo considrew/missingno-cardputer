@@ -31,6 +31,8 @@ struct Senses {
   uint32_t steps = 0;           // lifetime-of-boot step count
   float grav[3] = {0, 0, 1};    // where down is, in g (smoothed): x lean, y through the screen, z along the body
   float accG = 1;               // the whole acceleration right now, in g
+  float acc[3] = {0, 0, 1};     // the last raw reading, in g, same axes (for instruments that must be quick)
+  float gyro[3] = {0, 0, 0};    // turning, deg/s, same axes
 
   // time and place
   bool   haveTime = false;
@@ -128,6 +130,11 @@ struct SoundP {
   float wind = 0, rain = 0, crackle = 0;   // noise beds 0..1
   float answerHz = 0;           // sing back at this pitch (0 = silent)
   float hush = 0;               // 0..1 sleep / face-down: everything recedes
+  // the theremin: a voice the hand plays (0 amp = silent)
+  float thereHz = 0, thereAmp = 0;
+  float thereVib = 0;           // 0..1 how much it trembles
+  float thereBright = 0;        // 0..1 how much edge it has
+  float thereGlide = 0.03f;     // seconds to slide to a new pitch
 };
 
 enum NoteKind : uint8_t {
@@ -198,6 +205,13 @@ struct State {
   bool  proOpen = false;
   float proAge = 0;             // seconds since the dashboard appeared
   float solarHour = 0;          // local apparent solar time, when the sky is known
+
+  // "theremin": the hand plays it
+  bool  theremin = false;
+  uint8_t thereScale = 0;       // 0 glide, 1 chromatic, 2 its mood, 3.. the five dark modes
+  int8_t thereOct = 0;          // octaves up or down
+  bool  thereHold = false;      // the note and its loudness frozen
+  float thereAge = 0;           // seconds since it began
 
   // the one line of text it may speak, and the line being typed to it
   char  say[84] = {0};

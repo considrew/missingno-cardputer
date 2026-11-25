@@ -62,6 +62,7 @@ static struct {
 } lead;
 
 static struct { float ph, hz, env; } answer;
+static struct { float ph, hz, amp, vibPh, vib, bright, lp; } ther;   // the theremin
 static struct { float t, lp1, lp2, amp; bool on; } thunder;
 static struct { float t, hold, ph; int cnt; bool on; } rupture;
 static struct { float ph, amp; } geiger;
@@ -106,6 +107,7 @@ void synthInit(uint32_t seed) {
   }
   lead.on = false; lead.rest = 6.0f; lead.env = 0; lead.hz = 440; lead.degree = 7;
   answer.hz = 0; answer.env = 0;
+  memset(&ther, 0, sizeof(ther));
   thunder.on = false; rupture.on = false; geiger.amp = 0; tock.left = 0;
   sRoot = S.sound.rootHz; sGain = 0;
 }
@@ -120,6 +122,7 @@ int synthPartials(float* hz, int max) {
   for (int i = 0; i < 7 && n < max; i++) if (drone[i].amp > 0.02f) hz[n++] = sRoot * drone[i].ratio;
   if (lead.env > 0.05f && n < max) hz[n++] = lead.hz;
   if (answer.env > 0.05f && n < max) hz[n++] = answer.hz;
+  if (ther.amp > 0.02f && n < max) hz[n++] = ther.hz;
   return n;
 }
 
@@ -262,6 +265,21 @@ void synthRender(int16_t* out, int n) {
     float ansStep = ((ansT - answer.env) * (1.0f - expf(-dt / (ansT > 0 ? 0.25f : 0.5f)))) / blk;
     float ansInc = answer.hz * ISR;
 
+    // the theremin: follows the hand, slides between pitches, never clicks
+    float thT = clamp01(P.thereAmp), thHzT = P.thereHz;
+    if (!(thHzT > 20.0f && thHzT < 4000.0f)) thT = 0;
+    if (ther.amp < 0.002f && thT > 0) ther.hz = thHzT;          // from silence: start on the note
+    if (thT > 0) ther.hz += (thHzT - ther.hz) * (1.0f - expf(-dt / (P.thereGlide > 0.004f ? P.thereGlide : 0.004f)));
+    float thStep = ((thT - ther.amp) * (1.0f - expf(-dt / 0.035f))) / blk;
+    ther.vib += (clamp01(P.thereVib) - ther.vib) * (1.0f - expf(-dt / 0.05f));
+    ther.bright += (clamp01(P.thereBright) - ther.bright) * (1.0f - expf(-dt / 0.08f));
+    float thInc = ther.hz * ISR;
+    float thVibRate = (5.2f + 2.4f * ther.vib) * ISR, thVibDepth = 0.03f * ther.vib;
+    float thDrive = 1.0f + 2.2f * ther.bright;                  // a sine, pushed toward a reed
+    float thX = thDrive > 3.0f ? 3.0f : thDrive;
+    float thNorm = (27.0f + 9.0f * thX * thX) / (thX * (27.0f + thX * thX));
+    float thLp = 0.30f + 0.55f * ther.bright;
+
     windPh1 = wrap1(windPh1 + 0.07f * dt); windPh2 = wrap1(windPh2 + 0.19f * dt);
     float gust = 0.55f + 0.45f * fsin(windPh2);
     float windFc = 380.0f + 420.0f * (0.5f + 0.5f * fsin(windPh1)) + 300.0f * sWind;
@@ -314,6 +332,20 @@ void synthRender(int16_t* out, int n) {
         answer.ph += ansInc; if (answer.ph >= 1.0f) answer.ph -= 1.0f;
         float v = (fsin(answer.ph) + 0.25f * fsin(wrap1(answer.ph * 0.5f))) * answer.env * 0.24f;
         dry += v; send += v * 0.8f;
+      }
+
+      // the theremin
+      ther.amp += thStep;
+      if (ther.amp > 0.0005f) {
+        ther.vibPh += thVibRate; if (ther.vibPh >= 1.0f) ther.vibPh -= 1.0f;
+        ther.ph += thInc * (1.0f + thVibDepth * fsin(ther.vibPh));
+        if (ther.ph >= 1.0f) ther.ph -= 1.0f;
+        float x = fsin(ther.ph) * thDrive;
+        if (x > 3.0f) x = 3.0f; else if (x < -3.0f) x = -3.0f;
+        float y = x * (27.0f + x * x) / (27.0f + 9.0f * x * x) * thNorm + 0.06f * fsin(wrap1(ther.ph * 2.0f));
+        ther.lp += (y - ther.lp) * thLp;
+        float v = ther.lp * ther.amp * 0.55f;                 // a soloist: above the drone it leans back from
+        dry += v * 0.85f; send += v * 0.55f;
       }
 
       // bells

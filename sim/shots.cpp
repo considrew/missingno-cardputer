@@ -2,6 +2,7 @@
 #include "../missingno/src/core/mn_draw.h"
 #include "../missingno/src/core/mn_horizon.h"
 #include "../missingno/src/core/mn_pro.h"
+#include "../missingno/src/core/mn_theremin.h"
 #include <vector>
 #include <stdio.h>
 #include <string.h>
@@ -145,6 +146,39 @@ int main(int argc, char** argv) {
     }
     strcpy(S.typed, "pro tun"); S.proOpen = false; S.proBand = 2; S.proTool = 1; drawFrame(); dump("38_pro_typing");
     S.typed[0] = 0; strcpy(S.say, "the land rises to the south-east. the highest of it is 87 km away."); S.sayAge = 4; S.sayHold = 9; drawFrame(); dump("39_pro_speaking");
+    S = State();
+  }
+  // 40.. the theremin: a slide with a tremble, a phrase in its scale, held an octave up; the hand reach in pro
+  {
+    S = State(); S.t = 300; S.frame = 9000; S.hintAge = 99; S.sound.rootHz = 110;
+    auto pose = [](float roll, float lean, float spin) {
+      float r = roll * 0.0174533f, l = lean * 0.0174533f;
+      S.in.acc[0] = sinf(r); S.in.acc[1] = cosf(r) * sinf(l); S.in.acc[2] = cosf(r) * cosf(l);
+      S.in.spin = spin; S.in.gyro[2] = spin;
+    };
+    thereminStart();
+    for (int f = 0; f < 140; f++) {
+      float t = f / 30.0f;
+      pose(t < 2.5f ? -30 + 26 * t : 35 + 4 * sinf(t * 30.0f), 18 + 10 * sinf(t), t > 2.5f ? 160 : 0);
+      S.t += 1 / 30.0f; S.frame++; thereminTick(1 / 30.0f);
+    }
+    S.thereAge = 30; drawFrame(); dump("40_theremin_glide");
+    S.thereScale = 2; S.sound.mode = 1;
+    static const float PH[] = {0, 2, 3, 5, 7, 8, 7, 5, 3, 2, 0, -2};
+    for (int f = 0; f < 140; f++) {
+      int k = (f / 12) % 12;
+      pose(PH[k] / 18 * 55 + 1.5f * sinf(f * 0.4f), 22, 0);
+      S.t += 1 / 30.0f; S.frame++; thereminTick(1 / 30.0f);
+    }
+    drawFrame(); dump("41_theremin_mood");
+    S.thereOct = 1; S.thereHold = true;
+    for (int f = 0; f < 60; f++) { pose(-40, 70, 0); S.t += 1 / 30.0f; S.frame++; thereminTick(1 / 30.0f); }
+    drawFrame(); dump("42_theremin_held");
+    S.thereAge = 2; S.thereHold = false; S.thereOct = 0; S.thereScale = 0;
+    drawFrame(); dump("43_theremin_first");
+    thereminStop();
+    S.pro = true; S.proAge = 9; S.proBand = 1; S.proTool = 4; S.in.steps = 412; S.in.accG = 1.01f; S.in.grav[1] = 0.98f; S.in.antenna = -1;
+    drawFrame(); dump("44_pro_hand");
     S = State();
   }
   // font specimen

@@ -37,7 +37,8 @@ Fn with the arrow keys: **fn ;** / **fn .** volume up/down, **fn ,** / **fn /**
 previous/next view, **fn `** back.
 
 Words it obeys: `help`, `wifi`, `mute`, `unmute`, `vol 0`–`vol 9`, `spiral`,
-`chart`, `ear`, `shore`, `save`, `pro` (the instruments, below), `format`
+`chart`, `ear`, `shore`, `save`, `pro` (the instruments, below), `theremin`
+(its voice, played by tilting it, below), `format`
 (typed twice, it erases a card it cannot read and makes it its own), and
 `forget` (typed twice, it erases everything it remembers).
 
@@ -65,7 +66,7 @@ measures is, from its own body out to the sun.
 | reach | | instruments |
 |---|---|---|
 | SELF | 0 m | power, memory, link (enter opens Wi-Fi setup), system |
-| HAND | 1 m | level (a bubble lying flat; roll and pitch upright), motion (g, spin, falls), steps, wires |
+| HAND | 1 m | level (a bubble lying flat; roll and pitch upright), motion (g, spin, falls), steps, wires, theremin |
 | ROOM | 10 m | meter (level, spectrum, history), tuner, echo (enter strikes the room), knock (tempo) |
 | RF | 100 m | ether (the Wi-Fi networks it hears), kin |
 | AIR | 10 km | temperature and dew point, pressure and its trend, wind, weather |
@@ -85,6 +86,29 @@ line.
 The meter reads decibels below the microphone's full scale, not calibrated
 sound pressure. Local time comes from the weather service's time zone for
 where it is; without that, the clock shows UTC.
+
+### theremin
+
+Type `theremin` and it gives its voice to your hand. The accelerometer is
+the instrument and the gyroscope is the expression:
+
+| do this | and it |
+|---|---|
+| roll it left or right | plays lower or higher: three octaves across about 110 degrees |
+| raise it toward upright, or lean it back | swells, or fades; lying flat (or face down) it is silent |
+| twist it about the vertical, back and forth | trembles: the faster the twist, the deeper the vibrato |
+| move it quickly | the tone gets an edge |
+| `;` and `.` | octave up and down |
+| `,` and `/` | glide (no notes, a true theremin), chromatic, its own mood's scale, or one of five dark scales |
+| enter, or **G0** | holds the note, so you can put your hand down |
+| escape | stops (back to the dashboard, if that is where it came from) |
+
+The middle note is an octave above its own root, so it is always in tune
+with the drone, which steps back while you play. The creature sings it: its
+mouth opens with the volume, and the melody falls down the screen behind
+it. It is also on the dashboard, under HAND. Which way is "higher" depends
+on how the IMU sits in the case; if it feels backwards, it is one sign to
+flip in `mn_theremin.cpp`.
 
 ### What it can sense
 

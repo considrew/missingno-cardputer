@@ -423,6 +423,7 @@ static void readImu(mn::Senses& in) {
   float m = motionE / 0.55f; in.motion = m > 1 ? 1 : m;
   float mag = sqrtf(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]);
   in.accG = mag; in.grav[0] = gx; in.grav[1] = gy; in.grav[2] = gz;
+  for (int i = 0; i < 3; i++) { in.acc[i] = a[i]; in.gyro[i] = w[i]; }
   fallRun = mag < 0.3f ? fallRun + 1 : 0;
   in.freefall = fallRun >= 3;
   float gl = sqrtf(gx * gx + gy * gy + gz * gz); if (gl < 0.2f) gl = 0.2f;
