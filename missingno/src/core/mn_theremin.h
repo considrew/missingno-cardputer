@@ -1,9 +1,9 @@
 // missingno. -- the theremin. Typed `theremin`, it gives its voice to your hand.
 //
 // The accelerometer is the instrument: rolling it left and right is the pitch
-// antenna (three octaves across about 110 degrees), leaning it back from
-// upright is the volume loop (it swells as you raise it and falls silent lying
-// flat, or face down). The gyroscope is the expression: twisting it about the
+// antenna (three octaves across about 110 degrees, centred near a4). The volume
+// loop is tipping it forward or back: full as it was held when the word was
+// typed, fading to nothing about 55 degrees away either way, or face down. The gyroscope is the expression: twisting it about the
 // vertical makes the note tremble, and any quick movement gives it an edge.
 //
 //   ; and .   octave up and down        , and /   glide, chromatic, its mood, five dark scales

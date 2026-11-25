@@ -95,16 +95,17 @@ the instrument and the gyroscope is the expression:
 | do this | and it |
 |---|---|
 | roll it left or right | plays lower or higher: three octaves across about 110 degrees |
-| raise it toward upright, or lean it back | swells, or fades; lying flat (or face down) it is silent |
+| tip it forward or back from how you held it when you typed the word | fades; about 55 degrees away (or face down) it is silent |
 | twist it about the vertical, back and forth | trembles: the faster the twist, the deeper the vibrato |
 | move it quickly | the tone gets an edge |
-| `;` and `.` | octave up and down |
+| `;` and `.` (the up and down arrows) | octave up and down |
 | `,` and `/` | glide (no notes, a true theremin), chromatic, its own mood's scale, or one of five dark scales |
 | enter, or **G0** | holds the note, so you can put your hand down |
 | escape | stops (back to the dashboard, if that is where it came from) |
 
-The middle note is an octave above its own root, so it is always in tune
-with the drone, which steps back while you play. The creature sings it: its
+The middle note is its own root, folded up to sit near a4, so it is always
+in tune with the drone (which steps back while you play) and high enough
+for the little speaker; `;` and `.` move it from three octaves down to two up. The creature sings it: its
 mouth opens with the volume, and the melody falls down the screen behind
 it. It is also on the dashboard, under HAND. Which way is "higher" depends
 on how the IMU sits in the case; if it feels backwards, it is one sign to

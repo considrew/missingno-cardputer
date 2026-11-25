@@ -22,6 +22,8 @@ static inline int iround(float v) { return (int)floorf(v + 0.5f); }
 static struct {
   bool init;
   float ax, ay, az;               // the accelerometer, smoothed just enough to be steady
+  float home;                     // degrees: how it was held when it began (about the left/right axis)
+  float settle;                   // seconds since it began, until the pose is taken as home
   float roll, lean;               // degrees: left/right, and back from upright
   float pos;                      // where the hand is, semitones from the middle
   float note;                     // what is played, semitones from the middle
@@ -57,7 +59,7 @@ static float quantize(int scale, float pos) {
 
 void thereminStart() {
   S.theremin = true; S.thereAge = 0; S.thereHold = false;
-  T.fade = 0; T.n = 0; T.noteScale = -1; T.init = false;
+  T.fade = 0; T.n = 0; T.noteScale = -1; T.init = false; T.settle = 0;
 }
 
 void thereminStop() {
@@ -75,12 +77,18 @@ void thereminTick(float dt) {
   T.ax += (in.acc[0] - T.ax) * k; T.ay += (in.acc[1] - T.ay) * k; T.az += (in.acc[2] - T.az) * k;
   // Axes as the body gives them: held up in front of you, gravity runs along z,
   // x is the sideways lean, y goes through the screen.
+  // Roll (left/right) is the same in any pose. Forward/back is measured from
+  // however it was held when the word was typed, so no pose is the wrong one.
   T.roll = atan2f(T.ax, sqrtf(T.ay * T.ay + T.az * T.az)) * 57.29578f;
-  T.lean = atan2f(fabsf(T.ay), fabsf(T.az)) * 57.29578f;      // 0 upright .. 90 lying flat
+  float pitchAng = atan2f(T.ay, T.az) * 57.29578f;
+  if (T.settle < 0.6f) { T.settle += dt; T.home = pitchAng; }
+  float d = pitchAng - T.home;
+  while (d > 180.0f) d -= 360.0f; while (d < -180.0f) d += 360.0f;
+  T.lean = fabsf(d);                                           // 0 as it began .. tipped away either way
   if (!S.thereHold) {
     T.pos = clampf(T.roll / RANGE_DEG, -1.0f, 1.0f) * RANGE_ST;
     T.note = quantize(S.thereScale, T.pos);
-    float v = clampf((75.0f - T.lean) / 55.0f, 0.0f, 1.0f);   // full within 20 degrees of upright
+    float v = clampf((55.0f - T.lean) / 45.0f, 0.0f, 1.0f);   // full within 10 degrees of home, gone by 55
     T.vol = v * v;
   }
   T.fade = clampf(T.fade + dt / 1.2f, 0, 1);                 // never starts with a shout
@@ -92,8 +100,11 @@ void thereminTick(float dt) {
   T.vib += (vibT - T.vib) * (1.0f - expf(-dt / (vibT > T.vib ? 0.06f : 0.45f)));
   T.bright += (brT - T.bright) * (1.0f - expf(-dt / (brT > T.bright ? 0.04f : 0.7f)));
 
-  float root = p.rootHz > 55.0f && p.rootHz < 220.0f ? p.rootHz : 110.0f;
-  T.hz = 2.0f * root * powf(2.0f, S.thereOct + T.note / 12.0f);
+  // its root, folded into one octave, then the middle set near a4: a small
+  // speaker gives little below a few hundred hertz
+  float root = p.rootHz > 20.0f && p.rootHz < 4000.0f ? p.rootHz : 110.0f;
+  while (root < 98.0f) root *= 2.0f; while (root >= 196.0f) root *= 0.5f;
+  T.hz = 4.0f * root * powf(2.0f, S.thereOct + T.note / 12.0f);
   p.thereHz = T.hz;
   p.thereAmp = in.faceDown ? 0.0f : T.vol * T.fade;
   p.thereVib = T.vib;
@@ -113,7 +124,7 @@ bool thereminKey(int c) {
   if (!S.theremin || S.typed[0]) return false;
   if (c == K_VOL_UP || c == ';' || c == K_VOL_DOWN || c == '.') {
     int d = (c == K_VOL_UP || c == ';') ? 1 : -1;
-    int o = S.thereOct + d; if (o < -2) o = -2; if (o > 2) o = 2;
+    int o = S.thereOct + d; if (o < -3) o = -3; if (o > 2) o = 2;
     S.thereOct = (int8_t)o; pluck(d > 0);
     char b[24]; snprintf(b, sizeof(b), o ? "octave %+d." : "the middle octave.", o);
     mindSay(b, 1.5f, 2, false);
@@ -205,7 +216,7 @@ void drawTheremin() {
 
   if (S.thereAge < 9.0f && !S.typed[0]) {                     // how to hold it, at first
     rect(0, 106, 196, 29, C_VOID);
-    text(3, 109, "tilt: pitch   raise: louder", C_ASH);
+    text(3, 109, "tilt l/r: pitch  tip: fade", C_ASH);
     text(3, 120, "; . octave  , / scale  enter hold", C_SOOT);
   }
 }

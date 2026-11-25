@@ -783,7 +783,7 @@ static void command(char* line) {
       "words it obeys: wifi. mute. vol 0-9. spiral. chart. ear. shore. pro.",
       "hum and hold. knock a rhythm. carry it. forget, twice, erases.",
       "format, twice, erases a card it cannot read and makes it its own.",
-      "theremin: tilt it to sing, raise it to swell, twist it to tremble."};
+      "theremin: tilt it to sing, tip it to fade, twist it to tremble."};
     mindSay(HELP[M.helpN % 5], 9.0f, 2, false); M.helpN++; return;
   }
   if (!strcmp(w, "wifi")) { S.wantPortal = true; mindSay("opening a door.", 4.0f, 2, false); return; }
@@ -828,7 +828,7 @@ static void command(char* line) {
   if (!strcmp(w, "theremin")) {
     if (S.theremin) { thereminStop(); mindSay("it was only ever the air.", 4.0f, 2, false); return; }
     thereminStart();
-    mindSay("tilt it to sing. raise it to swell. twist it to tremble.", 7.0f, 2, false);
+    mindSay("tilt it to sing. tip it to fade. twist it to tremble.", 7.0f, 2, false);
     return;
   }
   // the instruments, laid out by reach; "pro tuner" goes straight to one

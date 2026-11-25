@@ -446,17 +446,20 @@ static void testTheremin() {
   typeLine("theremin");
   CHECK(S.theremin && strstr(S.say, "tilt"), "the word starts it and says how: %s", S.say);
   ticks(2.0f);
-  float ref = 2.0f * S.sound.rootHz;
+  float ref = S.sound.rootHz; while (ref < 98.0f) ref *= 2.0f; while (ref >= 196.0f) ref *= 0.5f; ref *= 4.0f;   // near a4
+  CHECK(ref >= 392.0f && ref < 784.0f, "the middle sits where a small speaker sings (%.0f Hz)", ref);
   CHECK(fabsf(semisOf(S.sound.thereHz, ref)) < 0.05f, "level: the middle note (%.1f Hz, root %.1f)", S.sound.thereHz, S.sound.rootHz);
   CHECK(S.sound.thereAmp > 0.95f, "nearly upright: full voice (%.2f)", S.sound.thereAmp);
   pose(55, 10); ticks(0.5f);
   CHECK(fabsf(semisOf(S.sound.thereHz, ref) - 18.0f) < 0.1f, "tilted all the way: an octave and a half up (%.2f st)", semisOf(S.sound.thereHz, ref));
   pose(-27.5f, 10); ticks(0.5f);
   CHECK(fabsf(semisOf(S.sound.thereHz, ref) + 9.0f) < 0.1f, "half the other way: nine down (%.2f st)", semisOf(S.sound.thereHz, ref));
-  pose(0, 47.5f); ticks(0.5f);
-  CHECK(fabsf(S.sound.thereAmp - 0.25f) < 0.03f, "leaned halfway back: quieter (%.2f)", S.sound.thereAmp);
+  pose(0, 42.5f); ticks(0.5f);
+  CHECK(fabsf(S.sound.thereAmp - 0.25f) < 0.03f, "tipped back from where it began: quieter (%.2f)", S.sound.thereAmp);
+  pose(0, -22.5f); ticks(0.5f);
+  CHECK(fabsf(S.sound.thereAmp - 0.25f) < 0.03f, "tipped forward as far: as quiet (%.2f)", S.sound.thereAmp);
   pose(0, 80); ticks(0.5f);
-  CHECK(S.sound.thereAmp < 0.01f, "lying flat: silent");
+  CHECK(S.sound.thereAmp < 0.01f, "tipped far away: silent");
   pose(0, 10, 200); ticks(0.5f);
   CHECK(S.sound.thereVib > 0.9f, "twisting: it trembles (%.2f)", S.sound.thereVib);
   pose(0, 10, 0); ticks(2.0f);
@@ -502,6 +505,12 @@ static void testTheremin() {
   for (int i = 0; i < 12; i++) drawFrame();
   mindKey(K_ESC);
   CHECK(!S.theremin && S.sound.thereAmp == 0, "escape ends it");
+  // begun lying flat on a table, that is home: it sings there
+  pose(0, 85); typeLine("theremin"); ticks(2.0f);
+  CHECK(S.theremin && S.sound.thereAmp > 0.95f, "begun lying flat: full voice there (%.2f)", S.sound.thereAmp);
+  pose(0, 35); ticks(0.5f);
+  CHECK(S.sound.thereAmp < 0.05f, "and lifting it upright fades it (%.2f)", S.sound.thereAmp);
+  mindKey(K_ESC);
   // from the dashboard, and back to it
   typeLine("pro"); S.proBand = 1; S.proTool = 4; mindKey(K_ENTER);
   CHECK(S.theremin && S.pro, "pro > hand > theremin, enter: it plays");

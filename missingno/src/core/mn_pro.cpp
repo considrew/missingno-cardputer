@@ -458,7 +458,7 @@ static void fWires(Card& c) {
   row(c, "UNIT", "ext.io 0x45");
 }
 
-static void actTheremin() { thereminStart(); mindSay("tilt it to sing. raise it to swell. twist it to tremble.", 7.0f, 2, false); }
+static void actTheremin() { thereminStart(); mindSay("tilt it to sing. tip it to fade. twist it to tremble.", 7.0f, 2, false); }
 static void fTheremin(Card& c) {
   char sc[16]; strncpy(sc, thereminScaleName(S.thereScale), sizeof(sc) - 1); sc[sizeof(sc) - 1] = 0;
   for (char* q = sc; *q; q++) if (*q >= 'a' && *q <= 'z') *q = (char)(*q - 32);
