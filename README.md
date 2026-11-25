@@ -189,8 +189,26 @@ Anyone without the key who tries gets refused, and it says so.
 
 The shore can show the land that actually stands around you: the near
 ground, the hills across the valley, the far ranges, each paler with
-distance. It is pre-rendered on your computer from public elevation data and
-then carried by the device:
+distance.
+
+**On its own, wherever it is taken.** With Wi-Fi and no GPS, it first works
+out where it is from the access points around it (through
+[beaconDB](https://beacondb.net), an open Wi-Fi location database), or failing
+that, roughly from its network address. Then, if it has no horizon for that
+place, it fetches the land around it: 360 rays out to 200 km from
+[OpenTopoData](https://www.opentopodata.org)'s public elevation API, a coarse
+pass and then a finer one around each ray's highest point, so summits are
+not missed. That takes about three minutes (`pro` > LAND > HORIZON shows the
+progress). The result, about a kilobyte, is kept on the card in
+`/missingno/hz/`, so a place is fetched once and remembered; it is used
+anywhere within 8 km, and a new one is fetched when it is carried further.
+The public API allows a thousand requests a day, about six new places.
+Location by network address can be tens of kilometres off on a phone
+hotspot; GPS, when there is one, always wins, and so does a town given at
+the Wi-Fi setup page.
+
+**Or pre-rendered on your computer**, finer (30 m data, a grid of points)
+and needing no network on the device:
 
 ```bash
 python3 tools/horizon.py --town "Innsbruck"
@@ -235,6 +253,13 @@ domain.
 
 - Weather requests to Open-Meteo, with the position rounded to two decimals
   (about a kilometre), and the town name if you give one.
+- When it has no GPS: the hardware addresses and signal strengths of up to 12
+  fixed access points it hears (phones' and hotspots' made-up addresses, and
+  networks named `_nomap`, are left out) to beaconDB, and if that fails, a
+  bare request to ip-api.com, which sees only its network address. At most
+  every ten minutes while online.
+- For a place it has no horizon for: points around it (out to 200 km, which
+  together give the place away) to OpenTopoData.
 - Network time requests.
 - An ESP-NOW broadcast every few seconds with its mood, its root note and
   **one short fragment of something typed to it**. It is unencrypted and

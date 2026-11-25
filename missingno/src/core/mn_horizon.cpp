@@ -36,7 +36,7 @@ bool horizonOpen(HorizonRead r, uint32_t size) {
   if ((G.ny > 1 || G.nx > 1) && (G.dlat <= 0 || G.dlon <= 0)) return false;
   if (64u + (uint32_t)G.ny * G.nx * G.rec > size) return false;
   rd = r; fileSize = size;
-  HZ.open = true; HZ.here = false; HZ.index = -1;
+  HZ.open = true; HZ.here = false; HZ.index = -1; HZ.gen++;
   HZ.bands = bands; HZ.sources = h[38];
   for (int i = 0; i < HZ_BANDS; i++) HZ.bandKm[i] = u16(h + 30 + i * 2);
   HZ.points = (uint32_t)G.ny * G.nx;
